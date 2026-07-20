@@ -1,0 +1,86 @@
+---
+title: "Probe Overview"
+description: "How NSP's runtime probes attach to live processes and extract semantic state without source code."
+---
+
+## What is a Probe?
+
+A **probe** is the component that physically connects to a running process and reads its internal state. NSP has four probes, each targeting a different runtime environment:
+
+<CardGroup cols={2}>
+  <Card title="V8 / JavaScript" icon="js" href="/probes/v8">
+    Chrome DevTools Protocol + ASO injection. Covers Gmail, Slack, VS Code, Notion, any Electron app. Typical latency: **5–50ms**.
+  </Card>
+  <Card title="JVM / Java" icon="java" href="/probes/jvm">
+    JVMTI agent attachment + JNI reflection. Covers Java desktop apps, ArduPilot GCS, Spring Boot services. Typical latency: **20–100ms**.
+  </Card>
+  <Card title="CLR / .NET" icon="microsoft" href="/probes/clr">
+    CLR Hosting API injection + MMF bridge. Covers Mission Planner, WinForms, WPF, .NET 4.x/6+. Typical latency: **10–80ms**.
+  </Card>
+  <Card title="Native" icon="c" href="/probes/native">
+    ReadProcessMemory + Visual-Memory Grounding. Covers C/C++ apps, Bloomberg Terminal, AutoCAD. Typical latency: **50–500ms**.
+  </Card>
+</CardGroup>
+
+---
+
+## Probe Lifecycle
+
+Every tracked process goes through the same lifecycle:
+
+| Phase | Description | Duration |
+|-------|-------------|----------|
+| **Detection** | ProcessScanner finds new PID, RuntimeDetector classifies it | < 1s |
+| **Attachment** | Probe connects to the target runtime | 1–30s |
+| **Cold Probe** | First full state extraction and schema discovery | 3–90s |
+| **Schema Build** | Action schemas written to SQLite registry | < 1s |
+| **Fast Poll** | Repeated state reads using optimized fast-path | 50ms/cycle |
+| **Notification** | `StateChangeNotification` broadcast to WebSocket subscribers | < 1ms |
+| **Detachment** | Process exits → probe cleaned up, state removed | < 1s |
+
+---
+
+## Probe Status Values
+
+The `probe_status` field in `AppSummary` reflects the current lifecycle phase:
+
+| Status | Description |
+|--------|-------------|
+| `detecting` | Process seen but runtime not classified yet |
+| `attaching` | Probe connecting to the target runtime |
+| `cold_probe` | First full state extraction in progress |
+| `active` | Fast poll loop running normally |
+| `error` | Probe encountered an error, will retry |
+| `detached` | Process exited, probe cleaned up |
+
+---
+
+## Confidence Score by Runtime
+
+Each probe produces a `confidence` score (0.0–1.0) reflecting how complete its semantic labeling is:
+
+| Runtime | Cold Probe | After Schema Cache |
+|---------|-----------|-------------------|
+| V8 (ASO path) | 0.95–0.99 | 0.97–0.99 |
+| V8 (Heap snapshot) | 0.75–0.90 | 0.90–0.97 |
+| JVM | 0.93–0.97 | 0.95–0.98 |
+| CLR | 0.93–0.97 | 0.95–0.98 |
+| Native | 0.40–0.75 | 0.60–0.80 |
+
+---
+
+## Forcing a Fresh Probe
+
+If you need the absolute latest state (not the 2s cached version):
+
+```bash
+# Via HTTP — triggers immediate fast-path re-read
+GET /substrate/v1/state/12847?fresh=true
+```
+
+```python
+# Via SDK
+await session.refresh(fresh_probe=True)
+```
+
+This bypasses the cache and triggers an immediate probe cycle. For V8 apps, this is ~50ms. For CLR/JVM apps, ~80ms. Do not call this in a tight loop — use WebSocket streaming instead.

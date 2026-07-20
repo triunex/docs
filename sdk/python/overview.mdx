@@ -1,0 +1,154 @@
+---
+title: "Python SDK Overview"
+description: "The official NSP Python SDK — nelieo-nsp. Full async support, typed models, WebSocket streaming, CLR/JVM helpers."
+---
+
+## Installation
+
+```bash
+pip install nelieo-nsp
+```
+
+**Requirements:**
+- Python 3.11 or later
+- `httpx` (async HTTP client)
+- `pydantic` v2 (data models)
+- `websockets` (WebSocket streaming)
+- `loguru` (structured logging)
+
+---
+
+## Package Structure
+
+```
+nelieo_nsp/
+├── __init__.py          # Public API — everything you need is re-exported here
+├── client.py            # NSPClient — main entry point
+├── session.py           # NSPSession, CLRSessionProxy, JVMSessionProxy
+├── models.py            # Pydantic data models (SubstrateState, ActionSchema, ...)
+├── transport.py         # Low-level HTTP + WebSocket transport
+├── watch.py             # WebSocket streaming — StateStream, open_state_stream
+├── exceptions.py        # Full exception hierarchy
+└── adapters.py          # Runtime-specific payload adapters and helpers
+```
+
+---
+
+## Quick Reference
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def main():
+    # ── Connect ────────────────────────────────────────────────────────
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        
+        # ── Discover apps ────────────────────────────────────────────
+        apps = await client.list_apps()
+        for app in apps:
+            print(f"{app.app_name}  pid={app.pid}  conf={app.confidence:.2f}")
+        
+        # ── Attach to an app by name ──────────────────────────────────
+        session = await client.attach("Gmail")
+        
+        # ── Read state ────────────────────────────────────────────────
+        unread = session.get_int("inbox.unread_count")
+        subject = session.get_str("inbox.emails[0].subject")
+        
+        # ── Check available actions ───────────────────────────────────
+        for name, schema in session.actions.items():
+            print(f"  {name}: {schema.signature}  [{schema.reversibility}]")
+        
+        # ── Execute an action ─────────────────────────────────────────
+        result = await session.execute(
+            "archive",
+            parameters={"email_id": session.get_str("inbox.emails[0].id")},
+        )
+        print(f"Archived: {result.success}  latency={result.latency_ms}ms")
+        
+        # ── Stream real-time changes ──────────────────────────────────
+        async with session.watch() as stream:
+            async for event in stream:
+                print(f"Changed keys: {event.changed_keys}")
+                await session.refresh()
+                break  # Just one event for demo
+
+asyncio.run(main())
+```
+
+---
+
+## Exported Symbols
+
+Everything you need is importable directly from `nelieo_nsp`:
+
+```python
+from nelieo_nsp import (
+    # Main client
+    NSPClient,
+    
+    # Session types
+    NSPSession,
+    CLRSessionProxy,   # .NET helpers (session.clr)
+    JVMSessionProxy,   # Java helpers (session.jvm)
+    
+    # Data models
+    SubstrateState,
+    AppSummary,
+    ActionSchema,
+    ActionParameter,
+    ActionRequest,
+    ActionResponse,
+    VerificationResult,
+    StateChangeNotification,
+    
+    # Enums
+    RuntimeKind,       # v8, jvm, clr, native, unknown
+    Reversibility,     # read, reversible_write, irreversible_write
+    
+    # Streaming
+    StateStream,
+    
+    # Exceptions
+    NSPError,
+    NSPAuthError,
+    NSPConnectionError,
+    NSPNotFoundError,
+    NSPRateLimitError,
+    NSPTimeoutError,
+    NSPConfidenceTooLowError,
+)
+```
+
+---
+
+## Environment Variable Configuration
+
+```bash
+# API key (alternative to passing api_key= in code)
+export NSP_API_KEY=sk_nsp_a1b2c3...
+
+# Daemon host/port (if not using localhost:7842)
+export NSP_HOST=127.0.0.1
+export NSP_PORT=7842
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="NSPClient" icon="plug" href="/sdk/python/client">
+    Connection management, list_apps, get_state, execute_action, attach.
+  </Card>
+  <Card title="NSPSession" icon="layers" href="/sdk/python/session">
+    The high-level session interface. get(), execute(), watch(), wait_for().
+  </Card>
+  <Card title="CLR Helpers" icon="microsoft" href="/sdk/python/clr">
+    Read .NET fields, invoke methods, walk the CLR heap.
+  </Card>
+  <Card title="Streaming" icon="radio" href="/sdk/python/streaming">
+    Real-time WebSocket state change streaming.
+  </Card>
+</CardGroup>

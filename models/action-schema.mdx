@@ -1,0 +1,113 @@
+---
+title: "ActionSchema"
+description: "The descriptor for a single action available on a substrate — signature, parameters, reversibility, and confidence."
+---
+
+## Overview
+
+Every action exposed by a tracked application is described by an `ActionSchema`. These are discovered by the probe at runtime from the application's code and stored in the schema registry.
+
+---
+
+## Schema
+
+```typescript
+interface ActionSchema {
+  name: string;                 // Action name (injected from map key)
+  signature: string;            // Full typed signature string
+  description: string;          // Human-readable description
+  reversibility: Reversibility; // "read" | "reversible_write" | "irreversible_write"
+  confidence: number;           // 0.0–1.0 — how certain the mapping is
+  internal_target: string | null; // Internal JS path or CDP directive
+  parameters: ActionParameter[];   // Typed parameter list
+}
+
+interface ActionParameter {
+  name: string;                     // Parameter name
+  type_name: string;                // "string" | "number" | "boolean" | "object" | "array"
+  required: boolean;                // Whether required
+  description: string | null;       // Human-readable description
+  allowed_values: any[] | null;     // Allowed values for enum-like params
+  default_value: any | null;        // Default value if not provided
+}
+```
+
+---
+
+## Example
+
+```json
+{
+  "send_reply": {
+    "name": "send_reply",
+    "signature": "fn(thread_id: string, body: string, cc?: string[]) -> bool",
+    "description": "Send a reply to an email thread",
+    "reversibility": "irreversible_write",
+    "confidence": 0.99,
+    "internal_target": "GmailInterface._sendReply",
+    "parameters": [
+      {
+        "name": "thread_id",
+        "type_name": "string",
+        "required": true,
+        "description": "Thread ID from inbox.emails[N].thread_id"
+      },
+      {
+        "name": "body",
+        "type_name": "string",
+        "required": true,
+        "description": "Reply body text (plain text or HTML)"
+      },
+      {
+        "name": "cc",
+        "type_name": "array",
+        "required": false,
+        "description": "Optional CC email addresses"
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Reversibility
+
+| Value | Description | Confidence Required | verify_expression |
+|-------|-------------|--------------------|--------------------|
+| `read` | No state change | 0.0+ | Optional |
+| `reversible_write` | Undoable change | 0.80+ | Optional |
+| `irreversible_write` | Permanent change | 0.95+ | **Required** |
+
+---
+
+## Python SDK
+
+```python
+schema = session.actions.get("send_reply")
+
+# Useful properties
+schema.name                     # "send_reply"
+schema.signature                # "fn(thread_id: string, body: string) -> bool"
+schema.reversibility            # Reversibility.IRREVERSIBLE_WRITE
+schema.confidence               # 0.99
+schema.is_destructive           # True (shorthand for IRREVERSIBLE_WRITE)
+schema.min_confidence_required  # 0.95
+schema.required_params          # [ActionParameter(name="thread_id", ...), ...]
+
+# Check if safe to call at current confidence
+if session.state.can_execute("send_reply"):
+    await session.execute("send_reply", ...)
+```
+
+---
+
+## Parameter Type Names
+
+| Type Name | Description | Example Values |
+|-----------|-------------|----------------|
+| `string` | UTF-8 string | `"hello"`, `"msg_abc123"` |
+| `number` | Integer or float | `42`, `3.14`, `-1` |
+| `boolean` | True/false | `true`, `false` |
+| `object` | JSON object | `{"key": "value"}` |
+| `array` | JSON array | `["a", "b", "c"]` |

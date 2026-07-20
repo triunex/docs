@@ -1,0 +1,99 @@
+---
+title: "WS /watch/{pid}"
+description: "Subscribe to real-time state change notifications over WebSocket."
+---
+
+## Endpoint
+
+```
+ws://127.0.0.1:7842/substrate/v1/watch/{pid}?key=<api_key>
+```
+
+### Authentication
+
+Pass the API key as a query parameter (WebSocket headers aren't supported by all clients):
+
+```
+ws://localhost:7842/substrate/v1/watch/12847?key=sk_nsp_...
+```
+
+---
+
+## Message Format
+
+The server sends JSON messages whenever the tracked process state changes:
+
+```json
+{
+  "pid": 12847,
+  "app_id": "gmail-chrome-12847",
+  "sequence": 142,
+  "changed_keys": [
+    "inbox.unread_count",
+    "inbox.emails[0].is_read"
+  ],
+  "captured_at": "2026-07-20T13:00:00.123Z"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `pid` | `integer` | OS process ID |
+| `app_id` | `string` | Stable app identifier |
+| `sequence` | `integer` | Monotonic counter. Gaps indicate dropped events or reconnection. |
+| `changed_keys` | `string[]` | Dot-notation keys that changed since last notification |
+| `captured_at` | `datetime` | ISO 8601 timestamp of the state capture |
+
+---
+
+## Behavior
+
+- Events fire on every successful probe cycle that detects state changes (default: every 2 seconds)
+- If the process exits, the WebSocket connection is closed by the server with code `1000`
+- If the daemon restarts, the connection is dropped — clients should reconnect
+- No heartbeat/ping required — the server sends events as they arrive
+
+---
+
+## JavaScript Example
+
+```javascript
+const ws = new WebSocket(
+  `ws://localhost:7842/substrate/v1/watch/12847?key=sk_nsp_...`
+);
+
+ws.onmessage = (msg) => {
+  const event = JSON.parse(msg.data);
+  console.log("Changed:", event.changed_keys);
+  console.log("Sequence:", event.sequence);
+};
+
+ws.onclose = (e) => {
+  console.log("Stream closed:", e.code, e.reason);
+  // Reconnect logic here
+};
+```
+
+## Python SDK
+
+```python
+# Via session (recommended)
+async with session.watch() as stream:
+    async for event in stream:
+        print(event.changed_keys, event.sequence)
+
+# Via client (raw)
+async with client.watch(pid=12847) as stream:
+    async for event in stream:
+        print(event.changed_keys)
+```
+
+---
+
+## Error Responses (HTTP upgrade phase)
+
+| Status | Description |
+|--------|-------------|
+| `401` | Missing or invalid API key |
+| `404` | PID not tracked |
+| `426` | Upgrade Required — must use WebSocket |

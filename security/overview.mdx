@@ -1,0 +1,97 @@
+---
+title: "Security Overview"
+description: "NSP's layered security model — API key auth, rate limiting, action safety gates, and production hardening."
+---
+
+## Security Model
+
+NSP runs on the local machine and by default only binds to `127.0.0.1`. This means only processes on the same host can call the daemon API. The security model has three layers:
+
+<CardGroup cols={3}>
+  <Card title="Transport" icon="lock">
+    Localhost-only binding by default. CORS controls for web clients. No TLS required for localhost.
+  </Card>
+  <Card title="Authentication" icon="key">
+    BLAKE3-hashed API keys required on every request. Keys stored in a secure JSON file, never in plaintext.
+  </Card>
+  <Card title="Action Safety" icon="shield">
+    Every action passes through a safety gate. Irreversible actions require a verify_expression. Dangerous action names are heuristically blocked.
+  </Card>
+</CardGroup>
+
+---
+
+## Threat Model
+
+NSP is designed for **local agent use** — the daemon and the agent run on the same machine. The threat model addresses:
+
+| Threat | Mitigation |
+|--------|-----------|
+| Other local processes calling the API | API key auth (`X-Substrate-Key`) |
+| Agent calling destructive actions accidentally | Action safety gate + `verify_expression` |
+| Agent flooding the API | Rate limiting (100 state/s, 10 action/s) |
+| Agent sending huge request bodies | 10MB body limit |
+| Request hanging indefinitely | 30s standard / 120s action timeouts |
+| Web page calling the API (CSRF/CORS) | CORS — only allowed origins can call |
+| Leaked API key | Keys are BLAKE3 hashed at rest |
+
+---
+
+## What NSP Does NOT Protect Against
+
+- **Root/admin processes** — if a process on the same machine has admin privileges, it could read the API key from memory. Run the daemon as a low-privilege user.
+- **Remote network access** — do not expose port 7842 to a network interface. Use `host = "127.0.0.1"` (the default).
+- **Supply chain attacks** — the daemon is a signed binary distributed through the Nelieo platform.
+
+---
+
+## Production Hardening Checklist
+
+<Steps>
+  <Step title="Enable API key auth">
+    ```toml
+    [auth]
+    require_key = true
+    keys_file = "C:\\ProgramData\\Nelieo\\axon_keys.json"
+    ```
+    Generate keys with `axon-daemon.exe keygen`.
+  </Step>
+  <Step title="Bind to localhost only">
+    ```toml
+    [server]
+    host = "127.0.0.1"
+    ```
+    Never use `0.0.0.0` unless you're explicitly exposing to a network with firewall protection.
+  </Step>
+  <Step title="Disable CORS wildcard">
+    ```toml
+    [cors]
+    allow_all_origins = false
+    allowed_origins = ["http://localhost:3000"]  # Your dashboard only
+    ```
+  </Step>
+  <Step title="Set rate limits">
+    ```toml
+    [rate_limit]
+    enabled = true
+    action_per_second = 5  # Tighter for production
+    ```
+  </Step>
+  <Step title="Use persistent schema registry">
+    ```toml
+    [registry]
+    in_memory = false
+    db_path = "C:\\ProgramData\\Nelieo\\axon_registry.db"
+    ```
+  </Step>
+  <Step title="Rotate API keys regularly">
+    Generate a new key: `axon-daemon.exe keygen --label prod-agent-v2`
+    Remove old keys from `axon_keys.json` by setting `"enabled": false`.
+  </Step>
+</Steps>
+
+---
+
+## Security Contact
+
+Found a vulnerability? Email **security@nelieo.com** with a detailed description. We respond within 24 hours and follow responsible disclosure practices.

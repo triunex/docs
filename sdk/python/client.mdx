@@ -1,0 +1,252 @@
+---
+title: "NSPClient"
+description: "The main entry point for the NSP Python SDK. Manages the HTTP connection and exposes all NSP API operations."
+---
+
+## Overview
+
+`NSPClient` is the top-level object you create to talk to the daemon. It manages:
+- The underlying `httpx.AsyncClient` connection pool
+- API key authentication
+- Base URL configuration
+- Connection/request timeouts
+
+---
+
+## Constructor
+
+```python
+class NSPClient:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        *,
+        host: str = "127.0.0.1",
+        port: int = 7842,
+        timeout: float = 30.0,
+        connect_timeout: float = 5.0,
+        max_connections: int = 20,
+        verify_ssl: bool = True,
+    ) -> None
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `api_key` | `str \| None` | `None` | API key. Reads `NSP_API_KEY` env var if not provided. |
+| `host` | `str` | `"127.0.0.1"` | Daemon host |
+| `port` | `int` | `7842` | Daemon port |
+| `timeout` | `float` | `30.0` | Request timeout in seconds |
+| `connect_timeout` | `float` | `5.0` | TCP connection timeout |
+| `max_connections` | `int` | `20` | Max simultaneous HTTP connections |
+| `verify_ssl` | `bool` | `True` | Verify SSL certificates |
+
+---
+
+## Lifecycle
+
+`NSPClient` is an **async context manager**. Always use it with `async with`:
+
+```python
+# Recommended — context manager handles cleanup
+async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    apps = await client.list_apps()
+
+# Manual lifecycle (for long-lived clients)
+client = nsp.NSPClient(api_key="sk_nsp_...")
+await client.__aenter__()
+try:
+    apps = await client.list_apps()
+finally:
+    await client.aclose()
+```
+
+---
+
+## Methods
+
+### `ping() → bool`
+
+Check whether the daemon is reachable. Returns `False` instead of raising on connection failure.
+
+```python
+is_up = await client.ping()
+if not is_up:
+    print("Daemon not running. Start it with: axon-daemon.exe run")
+```
+
+---
+
+### `list_apps() → list[AppSummary]`
+
+List all applications currently tracked by the daemon.
+
+```python
+apps = await client.list_apps()
+
+for app in apps:
+    print(f"{app.app_name:25s}  pid={app.pid:6d}  "
+          f"runtime={app.runtime:6s}  conf={app.confidence:.2f}  "
+          f"status={app.probe_status}")
+```
+
+**Returns:** List of `AppSummary` objects. Empty list if no apps are tracked.
+
+<Note>
+  This returns cached state — it does **not** trigger a fresh probe. The daemon updates this list automatically as processes start and stop.
+</Note>
+
+---
+
+### `get_state(pid, *, fresh=False) → SubstrateState`
+
+Get the current semantic state for a tracked process.
+
+```python
+state = await client.get_state(12847)
+print(state.confidence)                          # 0.97
+print(state.get_int("inbox.unread_count"))       # 47
+print(state.get_str("inbox.emails[0].subject")) # "Q3 Performance Report"
+
+# Force a fresh probe cycle (adds 50ms–90s depending on runtime)
+state = await client.get_state(12847, fresh=True)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `pid` | `int` | required | OS process ID |
+| `fresh` | `bool` | `False` | Trigger fresh probe before returning |
+
+**Raises:** `NSPNotFoundError` if the PID is not tracked.
+
+---
+
+### `attach(app_name_or_id, *, fresh=False, fuzzy=True) → NSPSession`
+
+Attach to a running application by name or app_id. Finds the first matching tracked app and opens an `NSPSession`.
+
+```python
+# Exact name match
+session = await client.attach("Gmail")
+
+# Partial match (fuzzy=True by default)
+session = await client.attach("mail")       # matches "Gmail"
+session = await client.attach("mission")    # matches "Mission Planner"
+
+# Exact app_id match
+session = await client.attach("gmail-chrome-12847")
+
+# Force fresh probe on attach
+session = await client.attach("Gmail", fresh=True)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `app_name_or_id` | `str` | required | App name or stable app_id |
+| `fresh` | `bool` | `False` | Trigger fresh probe |
+| `fuzzy` | `bool` | `True` | Allow partial name matches |
+
+**Raises:** `NSPNotFoundError` if no app matches.
+
+---
+
+### `attach_by_pid(pid, *, fresh=False) → NSPSession`
+
+Attach to a specific process by exact PID.
+
+```python
+session = await client.attach_by_pid(12847)
+```
+
+---
+
+### `session(pid, *, fresh=False) → NSPSession`
+
+Open a session for a PID. Lower-level than `attach()`.
+
+```python
+session = await client.session(12847)
+```
+
+---
+
+### `wait_for_app(app_name_or_id, *, timeout=60.0, poll_interval=2.0, fuzzy=True) → NSPSession`
+
+Wait for an app to appear in the tracked list, then attach. Useful when your agent starts before the target app.
+
+```python
+# Wait up to 60s for Mission Planner to launch
+session = await client.wait_for_app("Mission Planner", timeout=60.0)
+print(f"Mission Planner attached: {session.app_name}")
+```
+
+**Raises:** `asyncio.TimeoutError` if the app never appears within `timeout`.
+
+---
+
+### `watch(pid, *, max_queue=128, auto_reconnect=True)`
+
+Open a raw WebSocket stream for a PID. Returns an async context manager.
+
+```python
+async with client.watch(pid=12847) as stream:
+    async for event in stream:
+        print(event.changed_keys)  # e.g. ["inbox.unread_count", "inbox.emails[0]"]
+```
+
+For most use cases, prefer `session.watch()` which also auto-refreshes cached state.
+
+---
+
+### `execute_action(request) → ActionResponse`
+
+Low-level action execution. For most use cases, prefer `session.execute()`.
+
+```python
+from nelieo_nsp import ActionRequest
+
+request = ActionRequest(
+    pid=12847,
+    action="archive",
+    parameters={"email_id": "msg_18821af3"},
+    verify_expression="inbox.emails[0].id != 'msg_18821af3'",
+)
+response = await client.execute_action(request)
+print(f"Success: {response.success}  latency={response.latency_ms}ms")
+```
+
+---
+
+## Complete Example
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def monitor_gmail():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        # Wait for Gmail to be tracked (in case Chrome just launched)
+        print("Waiting for Gmail...")
+        session = await client.wait_for_app("Gmail", timeout=30.0)
+        
+        print(f"Attached: {session.app_name} (conf={session.confidence:.2f})")
+        
+        # Read initial state
+        unread = session.get_int("inbox.unread_count")
+        print(f"Unread emails: {unread}")
+        
+        # Show available actions
+        print(f"Available actions ({len(session.actions)}):")
+        for name, schema in session.actions.items():
+            star = " ⚠️ IRREVERSIBLE" if schema.is_destructive else ""
+            print(f"  {name}: {schema.signature}{star}")
+        
+        # Stream changes for 60 seconds
+        print("Streaming state changes for 60s...")
+        async with session.watch() as stream:
+            async for event in stream:
+                await session.refresh()
+                new_unread = session.get_int("inbox.unread_count")
+                print(f"State change: {event.changed_keys}  unread={new_unread}")
+
+asyncio.run(monitor_gmail())
+```

@@ -1,0 +1,69 @@
+---
+title: "POST /learn/{pid}"
+description: "Submit semantic feedback to improve state labeling for a tracked application."
+---
+
+## Endpoint
+
+```http
+POST /substrate/v1/learn/{pid}
+Authorization: X-Substrate-Key: <key>
+Content-Type: application/json
+```
+
+Submit human or agent-provided semantic corrections to improve the quality of state labels for a specific application. Feedback is stored in the schema registry and applied on subsequent probe cycles.
+
+---
+
+## Request Body
+
+```json
+{
+  "corrections": [
+    {
+      "observed_key": "unknown_0x4a2f",
+      "correct_label": "inbox.unread_count",
+      "correct_type": "number",
+      "confidence": 0.95,
+      "notes": "This field always matches the unread badge count"
+    }
+  ],
+  "schema_version": "1.4.2"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `corrections` | `array` | List of label corrections |
+| `corrections[].observed_key` | `string` | The current (possibly wrong or unknown) key name |
+| `corrections[].correct_label` | `string` | The correct dot-notation label |
+| `corrections[].correct_type` | `string` | Correct type: `number`, `string`, `boolean`, `object`, `array` |
+| `corrections[].confidence` | `float` | Your confidence in this correction (0.0–1.0) |
+| `corrections[].notes` | `string` | Optional description |
+| `schema_version` | `string` | Current schema version from `SubstrateState.schema_version` |
+
+---
+
+## Response
+
+```json
+{
+  "accepted": 1,
+  "rejected": 0,
+  "new_schema_version": "1.4.3",
+  "message": "1 correction applied. Schema updated to 1.4.3."
+}
+```
+
+---
+
+## When to Use This
+
+- An object is being labeled `unknown_XXXX` but you know what it represents
+- A state key has the wrong type (e.g., labeled as `string` but it's a `number`)
+- An action is pointing to the wrong function
+- You want to improve confidence for a specific app
+
+<Note>
+  The `learn` endpoint feeds into the schema registry. Corrections take effect on the next probe cycle (within 2s). Schema version is bumped on every accepted correction.
+</Note>

@@ -1,0 +1,224 @@
+---
+title: "POST /action"
+description: "Execute a typed action on a tracked application via its runtime probe."
+---
+
+## Endpoint
+
+```http
+POST /substrate/v1/action
+Authorization: X-Substrate-Key: <key>
+Content-Type: application/json
+```
+
+<Note>
+  The action route has a **120-second timeout** (separate from the standard 30s timeout). This accommodates cold probe attachment, CDP command execution, post-action state settlement, and verification polling.
+</Note>
+
+---
+
+## Request Body
+
+Either `pid` or `app_id` must be provided. The daemon resolves the other automatically.
+
+```json
+{
+  "pid": 12847,
+  "app_id": "gmail-chrome-12847",
+  "action": "send_reply",
+  "parameters": {
+    "thread_id": "thread_7af2b3",
+    "body": "Thanks for the report. I'll review it today."
+  },
+  "verify_expression": "inbox.sent_count > 0",
+  "verify_timeout_ms": 5000,
+  "fresh_state": false
+}
+```
+
+### Request Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pid` | `integer` | Either this or `app_id` | Target process PID |
+| `app_id` | `string` | Either this or `pid` | Target app ID |
+| `action` | `string` | ✓ | Action name from `state.actions` map |
+| `parameters` | `object` | ✓ | Parameters matching the action schema |
+| `verify_expression` | `string` | Required for `irreversible_write` | JS expression evaluated against post-action state |
+| `verify_timeout_ms` | `integer` | — | Verification polling timeout (100–30000ms, default: 5000) |
+| `fresh_state` | `boolean` | — | Capture fresh state before dispatching (default: false) |
+
+---
+
+## Response
+
+```json
+{
+  "success": true,
+  "action_id": "01j5abc123def456",
+  "action": "send_reply",
+  "executed": true,
+  "runtime": "v8",
+  "total_latency_ms": 312,
+  "message": "Action executed successfully",
+  "verification": {
+    "passed": true,
+    "expression": "inbox.sent_count > 0",
+    "computed_value": true,
+    "explanation": "inbox.sent_count changed from 14 to 15",
+    "latency_ms": 280,
+    "poll_cycles": 2,
+    "changed_fields": [
+      { "path": "inbox.sent_count", "before": 14, "after": 15 },
+      { "path": "inbox.emails[0].is_read", "before": false, "after": true }
+    ]
+  },
+  "updated_state": { ... },
+  "state_delta": {
+    "inbox.sent_count": { "before": 14, "after": 15 }
+  },
+  "raw_return": null,
+  "jvm_invoke_snapshot": null
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | `boolean` | `true` if action ran and verification passed |
+| `action_id` | `string` (UUIDv7) | Unique ID for this execution |
+| `action` | `string` | The action name |
+| `executed` | `boolean` | Whether the action itself ran (may be false on pre-flight failure) |
+| `runtime` | `string` | Runtime used for execution |
+| `total_latency_ms` | `integer` | Total wall time from request to response |
+| `message` | `string` | Human-readable status |
+| `verification` | `VerificationOutcome \| null` | Post-action verification result |
+| `updated_state` | `SubstrateState \| null` | Full updated state after action |
+| `state_delta` | `object \| null` | Before/after diff of changed fields |
+| `raw_return` | `any \| null` | Raw return value (JVM/CLR method invocations) |
+
+---
+
+## CDP Builtin Actions
+
+For V8 apps, NSP exposes CDP built-in actions that map directly to CDP commands:
+
+| Action Name | CDP Command | Parameters | Description |
+|-------------|-------------|------------|-------------|
+| `click` | `Input.dispatchMouseEvent` | `x`, `y` | Click at pixel coordinates |
+| `type` | `Input.dispatchKeyEvent` | `text` | Type text into focused element |
+| `navigate` | `Page.navigate` | `url` | Navigate to URL |
+| `clear` | `DOM.focus` + select all + delete | `selector` | Clear an input |
+| `focus` | `Runtime.evaluate` | `selector` | Focus a DOM element |
+| `scroll` | `Input.dispatchMouseEvent` | `x`, `y`, `deltaY` | Scroll at position |
+
+```json
+// Click at pixel (847, 392)
+{
+  "app_id": "gmail-chrome-12847",
+  "action": "click",
+  "parameters": { "x": 847, "y": 392 }
+}
+
+// Navigate to a URL
+{
+  "app_id": "gmail-chrome-12847",
+  "action": "navigate",
+  "parameters": { "url": "https://mail.google.com/mail/u/0/#starred" }
+}
+```
+
+---
+
+## Action Safety Gates
+
+The action endpoint enforces the following safety rules before dispatching:
+
+### 1. Irreversible Write Gate
+
+If the action's schema has `reversibility: "irreversible_write"`, a `verify_expression` is required:
+
+```json
+// ❌ Rejected — missing verify_expression
+{
+  "action": "send_reply",
+  "parameters": { ... }
+}
+
+// ✅ Accepted
+{
+  "action": "send_reply",
+  "parameters": { ... },
+  "verify_expression": "inbox.sent_count > 0"
+}
+```
+
+### 2. Dangerous Name Heuristic
+
+If the PID can't be resolved and the action name contains `delete`, `destroy`, `purge`, `wipe`, `reset`, `clear_all`, `terminate`, `shutdown`, or `kill`, the request is rejected with a 400.
+
+### 3. verify_expression Size Limit
+
+`verify_expression` is limited to 2048 bytes (configurable via `dispatcher.verify_expression_max_bytes`).
+
+---
+
+## Examples
+
+<CodeGroup>
+```bash cURL — Archive Email
+curl -X POST http://localhost:7842/substrate/v1/action \
+  -H "X-Substrate-Key: sk_nsp_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app_id": "gmail-chrome-12847",
+    "action": "archive",
+    "parameters": { "email_id": "msg_18821af3" }
+  }'
+```
+
+```bash cURL — Send Reply with Verify
+curl -X POST http://localhost:7842/substrate/v1/action \
+  -H "X-Substrate-Key: sk_nsp_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pid": 12847,
+    "action": "send_reply",
+    "parameters": {
+      "thread_id": "thread_7af2b3",
+      "body": "Thank you for reaching out."
+    },
+    "verify_expression": "inbox.sent_count > 0",
+    "verify_timeout_ms": 5000
+  }'
+```
+
+```python Python SDK
+# Simple action
+result = await session.execute("archive", parameters={"email_id": "msg_18821af3"})
+
+# Destructive with verify
+result = await session.execute(
+    "send_reply",
+    parameters={"thread_id": "thread_7af2b3", "body": "Thank you."},
+    verify=True,
+    verify_expression="inbox.sent_count > 0",
+)
+print(f"Success: {result.success}, verified: {result.verification.passed}")
+```
+</CodeGroup>
+
+---
+
+## Error Responses
+
+| Status | Code | Description |
+|--------|------|-------------|
+| `400` | `missing_verify_expression` | IrreversibleWrite without verify_expression |
+| `400` | `verify_expression_too_large` | Expression exceeds 2048 bytes |
+| `400` | `dangerous_action_unverified` | Dangerous action name without verify_expression |
+| `404` | `pid_not_found` | PID or app_id not tracked |
+| `422` | `verification_failed` | Action ran but post-state didn't match expression |
+| `429` | `rate_limited` | Exceeded 10 actions/second |
+| `503` | `confidence_too_low` | State confidence below action threshold |

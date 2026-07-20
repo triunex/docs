@@ -1,0 +1,87 @@
+---
+title: "API Reference Overview"
+description: "Complete reference for all NSP REST and WebSocket endpoints. Base URL: http://localhost:7842"
+---
+
+## Base URL
+
+```
+http://127.0.0.1:7842
+```
+
+All NSP API endpoints (except `/health`) are prefixed with `/substrate/v1`.
+
+---
+
+## Authentication
+
+All endpoints (except `GET /health`) require the `X-Substrate-Key` header:
+
+```bash
+curl -H "X-Substrate-Key: sk_nsp_a1b2c3..." http://localhost:7842/substrate/v1/apps
+```
+
+---
+
+## Endpoint Summary
+
+| Method | Path | Auth | Rate Limit | Description |
+|--------|------|------|------------|-------------|
+| `GET` | `/health` | None | None | Liveness probe |
+| `GET` | `/substrate/v1/apps` | ✓ | 100/s | List tracked apps |
+| `GET` | `/substrate/v1/state/{pid}` | ✓ | 100/s | Full state snapshot |
+| `GET` | `/substrate/v1/schema/{pid}` | ✓ | 100/s | Action schema |
+| `POST` | `/substrate/v1/action` | ✓ | 10/s | Execute action |
+| `WS` | `/substrate/v1/watch/{pid}` | ✓ | — | Real-time stream |
+| `GET` | `/substrate/v1/diff/{pid}` | ✓ | 100/s | State diff |
+| `POST` | `/substrate/v1/verify` | ✓ | 100/s | Standalone verify |
+| `POST` | `/substrate/v1/learn/{pid}` | ✓ | 10/s | Submit feedback |
+
+---
+
+## Common Response Codes
+
+| Code | Meaning |
+|------|---------|
+| `200` | Success |
+| `400` | Bad request — invalid parameters |
+| `401` | Unauthorized — missing or invalid API key |
+| `404` | PID or app not found |
+| `422` | Verification failed — action ran but post-state check failed |
+| `429` | Rate limit exceeded |
+| `503` | Daemon overloaded or probe not ready |
+| `504` | Timeout — request exceeded 30s (or 120s for action) |
+
+---
+
+## Error Response Format
+
+All error responses return a JSON body:
+
+```json
+{
+  "error": {
+    "code": "not_found",
+    "message": "Process 12847 is not tracked. Is the app running?",
+    "request_id": "01j5abc123"
+  }
+}
+```
+
+---
+
+## Content Type
+
+All requests must use `Content-Type: application/json`. All responses are `application/json`.
+
+---
+
+## Request IDs
+
+Every response includes an `X-Request-Id` header for tracing:
+
+```
+X-Request-Id: 01j5abc123def456
+```
+
+Include this in bug reports or support requests.

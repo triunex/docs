@@ -1,0 +1,211 @@
+---
+title: "Quickstart"
+description: "Get NSP running in 5 minutes. Install the daemon, configure Chrome, and call your first state endpoint."
+---
+
+## Prerequisites
+
+- **Windows 10/11 x64** (macOS/Linux support in beta)
+- **Python 3.11+** for the SDK
+- **Google Chrome** for V8/JavaScript app probing
+
+---
+
+## Step 1 — Install the Daemon
+
+Download the latest `Nelieo NSP Setup.exe` from [www.nelieo.com](https://www.nelieo.com/) and run it.
+
+The installer:
+- Registers `axon-daemon.exe` as a Windows Service (auto-starts on login)
+- Places the daemon at `C:\Program Files\Nelieo\axon-daemon.exe`
+- Creates a default config at `C:\ProgramData\Nelieo\axon.toml`
+- Starts the daemon immediately on port **7842**
+
+<Tip>
+  You can also run the daemon manually for development:
+  ```bash
+  axon-daemon.exe run
+  ```
+</Tip>
+
+### Verify the daemon is running
+
+```bash
+curl http://localhost:7842/health
+```
+
+```json
+{
+  "status": "ok",
+  "version": "1.0.0",
+  "uptime_secs": 42,
+  "tracked_processes": 0,
+  "auth_enabled": false
+}
+```
+
+---
+
+## Step 2 — Configure Chrome for V8 Probing
+
+For NSP to extract semantic state from JavaScript apps (Gmail, Slack, VS Code, etc.), Chrome must be launched with the CDP remote debugging port enabled.
+
+**Windows (Command Prompt):**
+```cmd
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+```
+
+**Windows (PowerShell):**
+```powershell
+Start-Process "chrome.exe" --ArgumentList "--remote-debugging-port=9222"
+```
+
+<Warning>
+  You must **close all existing Chrome windows first**, then relaunch with this flag. Chrome only supports one debugging port per user profile.
+</Warning>
+
+Once Chrome is running, open Gmail (`mail.google.com`) in any tab.
+
+---
+
+## Step 3 — Verify App Detection
+
+The daemon automatically detects Chrome and starts probing:
+
+```bash
+curl http://localhost:7842/substrate/v1/apps
+```
+
+```json
+{
+  "total": 1,
+  "apps": [
+    {
+      "pid": 12847,
+      "app_id": "gmail-12847",
+      "app_name": "Gmail",
+      "runtime": "v8",
+      "probe_status": "active",
+      "confidence": 0.97,
+      "object_count": 23,
+      "action_count": 5
+    }
+  ]
+}
+```
+
+---
+
+## Step 4 — Read Application State
+
+Use the PID from the listing to read Gmail's live state:
+
+```bash
+curl http://localhost:7842/substrate/v1/state/12847
+```
+
+```json
+{
+  "app_id": "gmail-12847",
+  "app_name": "Gmail",
+  "runtime": "v8",
+  "confidence": 0.97,
+  "captured_at": "2026-07-20T13:00:00Z",
+  "objects": {
+    "inbox.unread_count": 47,
+    "inbox.total_count": 1284,
+    "inbox.emails[0].id": "msg_18821af3",
+    "inbox.emails[0].from": "alice@example.com",
+    "inbox.emails[0].subject": "Q3 Performance Report",
+    "inbox.emails[0].is_read": false,
+    "context.url": "https://mail.google.com/mail/u/0/#inbox",
+    "context.view": "gmail_inbox"
+  },
+  "actions": {
+    "send_reply": {
+      "signature": "fn(thread_id: string, body: string, cc?: string[]) -> bool",
+      "reversibility": "irreversible_write",
+      "description": "Send a reply to an email thread",
+      "confidence": 0.99
+    },
+    "archive": {
+      "signature": "fn(email_id: string) -> bool",
+      "reversibility": "reversible_write",
+      "confidence": 0.99
+    }
+  }
+}
+```
+
+---
+
+## Step 5 — Install the Python SDK
+
+```bash
+pip install nelieo-nsp
+```
+
+---
+
+## Step 6 — Write Your First Agent
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def gmail_agent():
+    async with nsp.NSPClient() as client:
+        # Attach to Gmail by name (no PID needed)
+        session = await client.attach("Gmail")
+        
+        # Read state with typed helpers
+        unread = session.get_int("inbox.unread_count")
+        print(f"You have {unread} unread emails")
+        
+        # Read the first email's subject
+        subject = session.get_str("inbox.emails[0].subject")
+        sender = session.get_str("inbox.emails[0].from")
+        print(f"Latest: '{subject}' from {sender}")
+        
+        # Execute an action (with verification)
+        thread_id = session.get_str("inbox.emails[0].thread_id")
+        result = await session.execute(
+            "send_reply",
+            parameters={
+                "thread_id": thread_id,
+                "body": "Thanks, I'll review this shortly."
+            },
+            verify=True,
+            verify_expression="inbox.emails[0].is_read == true",
+        )
+        
+        print(f"Reply sent: {result.success} in {result.latency_ms}ms")
+
+asyncio.run(gmail_agent())
+```
+
+**Output:**
+```
+You have 47 unread emails
+Latest: 'Q3 Performance Report' from alice@example.com
+Reply sent: True in 312ms
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book" href="/concepts">
+    Understand SubstrateState, SSF, action schemas, and reversibility classification.
+  </Card>
+  <Card title="Daemon Configuration" icon="sliders" href="/daemon/configuration">
+    Configure ports, authentication, rate limits, and watcher intervals.
+  </Card>
+  <Card title="SDK Deep Dive" icon="python" href="/sdk/python/overview">
+    Sessions, CLR/JVM helpers, real-time streaming, and error handling.
+  </Card>
+  <Card title="Security Guide" icon="shield" href="/security/overview">
+    Set up API key auth before your agent goes near production data.
+  </Card>
+</CardGroup>

@@ -1,0 +1,106 @@
+---
+title: "GET /apps"
+description: "List all applications currently tracked by the daemon."
+---
+
+## Endpoint
+
+```http
+GET /substrate/v1/apps
+Authorization: X-Substrate-Key: <key>
+```
+
+---
+
+## Response
+
+```json
+{
+  "total": 3,
+  "apps": [
+    {
+      "pid": 12847,
+      "app_id": "gmail-chrome-12847",
+      "app_name": "Gmail",
+      "runtime": "v8",
+      "runtime_name": "JavaScript (V8)",
+      "probe_status": "active",
+      "confidence": 0.97,
+      "object_count": 23,
+      "action_count": 5,
+      "last_captured_at": "2026-07-20T13:00:00Z",
+      "has_state": true,
+      "current_view": "gmail_inbox",
+      "current_url": "https://mail.google.com/mail/u/0/#inbox"
+    },
+    {
+      "pid": 4521,
+      "app_id": "mission-planner-4521",
+      "app_name": "Mission Planner",
+      "runtime": "clr",
+      "runtime_name": ".NET CLR",
+      "probe_status": "active",
+      "confidence": 0.95,
+      "object_count": 47,
+      "action_count": 12,
+      "last_captured_at": "2026-07-20T13:00:01Z",
+      "has_state": true,
+      "current_view": null,
+      "current_url": null
+    }
+  ]
+}
+```
+
+### AppSummary Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `pid` | `integer` | OS process ID |
+| `app_id` | `string` | Stable semantic identifier — survives daemon restarts |
+| `app_name` | `string` | Human-readable name |
+| `runtime` | `string` | `v8` / `jvm` / `clr` / `native` / `unknown` |
+| `runtime_name` | `string` | Human-readable runtime name |
+| `probe_status` | `string` | `detecting` / `attaching` / `cold_probe` / `active` / `error` / `detached` |
+| `confidence` | `float` | State quality score 0.0–1.0 |
+| `object_count` | `integer` | Number of SSF state objects |
+| `action_count` | `integer` | Number of available actions |
+| `last_captured_at` | `datetime` | Timestamp of latest state snapshot |
+| `has_state` | `boolean` | Whether a state snapshot is available |
+| `current_view` | `string \| null` | Semantic view name (V8 apps) |
+| `current_url` | `string \| null` | Current URL (browser/Electron apps) |
+
+---
+
+## Examples
+
+<CodeGroup>
+```bash cURL
+curl -H "X-Substrate-Key: sk_nsp_..." \
+     http://localhost:7842/substrate/v1/apps
+```
+
+```python Python SDK
+apps = await client.list_apps()
+
+for app in apps:
+    print(f"{app.app_name:25s}  {app.runtime:6s}  conf={app.confidence:.2f}  "
+          f"objects={app.object_count}  status={app.probe_status}")
+```
+
+```javascript Fetch
+const res = await fetch("http://localhost:7842/substrate/v1/apps", {
+  headers: { "X-Substrate-Key": "sk_nsp_..." }
+});
+const { apps } = await res.json();
+```
+</CodeGroup>
+
+---
+
+## Notes
+
+- Returns **cached** state. Does not trigger new probes.
+- The daemon continuously updates this list as processes start and stop.
+- Apps with `has_state: false` are still being probed (cold probe in progress).
+- `probe_status: "error"` means the last probe attempt failed; the daemon will retry automatically.

@@ -1,0 +1,180 @@
+---
+title: "Guide: Real-Time Streaming"
+description: "Build latency-optimized agents that react to state changes in under 100ms using WebSocket streaming."
+---
+
+## Why Streaming Beats Polling
+
+| Approach | State Latency | CPU Usage | Rate Limit Impact |
+|----------|--------------|-----------|-------------------|
+| Polling every 500ms | 0–500ms avg | High | 2 req/s per app |
+| Polling every 100ms | 0–100ms avg | Very High | 10 req/s per app |
+| **WebSocket streaming** | **50–100ms** | **Minimal** | **Not rate-limited** |
+
+Streaming is the right default for any agent that reacts to application events.
+
+---
+
+## Basic Streaming Pattern
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def main():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        session = await client.attach("Gmail")
+        
+        # Auto-refresh: session.state is always current inside the loop
+        async with session.watch(auto_refresh_on_event=True) as stream:
+            async for event in stream:
+                # React only to inbox changes
+                if "inbox.unread_count" not in event.changed_keys:
+                    continue
+                
+                unread = session.get_int("inbox.unread_count")
+                print(f"Unread changed → {unread}")
+                
+                # Take action on new email
+                if unread > 0:
+                    await handle_email(session)
+
+async def handle_email(session):
+    subject = session.get_str("inbox.emails[0].subject")
+    from_addr = session.get_str("inbox.emails[0].from")
+    thread_id = session.get_str("inbox.emails[0].thread_id")
+    
+    print(f"New: '{subject}' from {from_addr}")
+    
+    # Archive low-priority
+    if "newsletter" in subject.lower():
+        email_id = session.get_str("inbox.emails[0].id")
+        await session.execute("archive", parameters={"email_id": email_id})
+
+asyncio.run(main())
+```
+
+---
+
+## Multi-App Streaming
+
+Watch multiple applications simultaneously:
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def watch_app(session):
+    """Watch a single app and react to state changes."""
+    async with session.watch(auto_refresh_on_event=True) as stream:
+        async for event in stream:
+            print(f"[{session.app_name}] {event.changed_keys}")
+            await react(session, event)
+
+async def react(session, event):
+    if session.app_name == "Gmail":
+        if "inbox.unread_count" in event.changed_keys:
+            print(f"  Gmail unread: {session.get_int('inbox.unread_count')}")
+    elif session.app_name == "Mission Planner":
+        if "flight.altitude_m" in event.changed_keys:
+            print(f"  Altitude: {session.get_float('flight.altitude_m'):.1f}m")
+
+async def main():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        apps = await client.list_apps()
+        sessions = []
+        for app in apps:
+            if app.has_state and app.confidence >= 0.80:
+                s = await client.session(app.pid)
+                sessions.append(s)
+        
+        print(f"Watching {len(sessions)} apps...")
+        await asyncio.gather(*[watch_app(s) for s in sessions])
+
+asyncio.run(main())
+```
+
+---
+
+## Rate-Aware Agent
+
+When you must poll (e.g., for periodic summaries), respect rate limits:
+
+```python
+import asyncio
+import time
+import nelieo_nsp as nsp
+
+async def periodic_summary(session, interval_secs=30):
+    """Log an inbox summary every 30 seconds."""
+    while True:
+        try:
+            await session.refresh()
+            unread = session.get_int("inbox.unread_count")
+            print(f"[{time.strftime('%H:%M:%S')}] Unread: {unread}")
+        except nsp.NSPRateLimitError:
+            await asyncio.sleep(5)
+            continue
+        
+        await asyncio.sleep(interval_secs)
+
+async def reactive_handler(session):
+    """React immediately to new emails via streaming."""
+    async with session.watch(auto_refresh_on_event=True) as stream:
+        async for event in stream:
+            if "inbox.emails[0].id" in event.changed_keys:
+                subject = session.get_str("inbox.emails[0].subject")
+                print(f"🔔 New email: {subject}")
+
+async def main():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        session = await client.attach("Gmail")
+        
+        # Run both concurrently
+        await asyncio.gather(
+            periodic_summary(session),
+            reactive_handler(session),
+        )
+
+asyncio.run(main())
+```
+
+---
+
+## Detecting Reconnections
+
+Sequence gaps indicate reconnections:
+
+```python
+last_seq = 0
+
+async with session.watch() as stream:
+    async for event in stream:
+        if event.sequence > last_seq + 1:
+            missed = event.sequence - last_seq - 1
+            print(f"⚠️  Missed {missed} events (sequences {last_seq+1}–{event.sequence-1})")
+            # Refresh to get fresh state
+            await session.refresh(fresh_probe=True)
+        
+        last_seq = event.sequence
+        print(f"[seq={event.sequence}] {event.changed_keys}")
+```
+
+---
+
+## Streaming Raw WebSocket (curl)
+
+For testing or non-Python clients:
+
+```bash
+# Install websocat
+# https://github.com/vi/websocat
+
+websocat "ws://localhost:7842/substrate/v1/watch/12847?key=sk_nsp_..."
+```
+
+Output (one JSON line per event):
+```json
+{"pid":12847,"app_id":"gmail-chrome-12847","sequence":1,"changed_keys":["inbox.unread_count"],"captured_at":"2026-07-20T13:00:00Z"}
+{"pid":12847,"app_id":"gmail-chrome-12847","sequence":2,"changed_keys":["inbox.emails[0].is_read"],"captured_at":"2026-07-20T13:00:02Z"}
+```

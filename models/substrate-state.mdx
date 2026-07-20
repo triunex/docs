@@ -1,0 +1,135 @@
+---
+title: "SubstrateState"
+description: "The core data model — a typed, versioned snapshot of a running application's semantic state."
+---
+
+## Overview
+
+`SubstrateState` is the central data structure in NSP. Every read returns one, every action updates one. It is the ground truth of what an application contains at a point in time.
+
+---
+
+## Schema
+
+```typescript
+interface SubstrateState {
+  capture_id: string;          // UUIDv7 — time-ordered unique capture ID
+  app_id: string;              // Stable semantic identifier
+  app_name: string;            // Human-readable name ("Gmail", "Mission Planner")
+  pid: number;                 // OS process ID
+  runtime: RuntimeKind;        // "v8" | "jvm" | "clr" | "native" | "unknown"
+  schema_version: string;      // Semver of discovered schema ("1.4.2")
+  captured_at: string;         // ISO 8601 datetime
+  confidence: number;          // 0.0–1.0 probe quality score
+  context: AppContext;         // Navigational context
+  objects: Record<string, any>; // Dot-notation state key-value map
+  actions: Record<string, ActionSchema>; // Available actions
+  probe_metadata: ProbeMetadata; // Internal telemetry
+}
+```
+
+---
+
+## Fields
+
+### `capture_id`
+**Type:** `string` (UUIDv7)
+
+A time-ordered UUID generated for each state capture. Monotonically increasing — a higher `capture_id` is always more recent. Use this to detect stale responses.
+
+### `app_id`
+**Type:** `string`
+
+A stable semantic identifier for the application. Format: `{app-name}-{runtime}-{pid}` on first detection, then promoted to a content-hash-based ID that survives restarts.
+
+```
+"gmail-chrome-12847"
+"mission-planner-4521"
+"vscode-14293"
+```
+
+### `confidence`
+**Type:** `float` (0.0–1.0)
+
+Overall probe quality. Rounds to 4 decimal places.
+
+| Range | Meaning |
+|-------|---------|
+| `0.00–0.39` | Probe initializing — no actions |
+| `0.40–0.79` | Partial coverage — read-only |
+| `0.80–0.94` | Good — reversible writes allowed |
+| `0.95–1.00` | Excellent — all actions allowed |
+
+### `objects`
+**Type:** `Record<string, any>`
+
+The semantic state. All keys use dot-notation with array indexing:
+
+```json
+{
+  "inbox.unread_count": 47,
+  "inbox.emails[0].from": "alice@example.com",
+  "flight.altitude_m": 42.7,
+  "context.url": "https://mail.google.com/..."
+}
+```
+
+Value types: `number`, `string`, `boolean`, `null`, `object`, `array`.
+
+### `actions`
+**Type:** `Record<string, ActionSchema>`
+
+Map of action name → `ActionSchema`. Keys are action names; values are the schemas. See [ActionSchema](/models/action-schema).
+
+### `context`
+**Type:** `AppContext`
+
+```typescript
+interface AppContext {
+  url: string | null;          // Current URL (V8/browser apps)
+  location: string | null;     // Canonicalized path ("/inbox")
+  view: string | null;         // Semantic view name ("gmail_inbox")
+  window_title: string | null; // OS window title
+  window_id: string | null;    // Tab or window identifier
+}
+```
+
+---
+
+## Python SDK
+
+```python
+state: nsp.SubstrateState = await client.get_state(pid)
+
+# Type-safe accessors
+unread: int   = state.get_int("inbox.unread_count")
+subject: str  = state.get_str("inbox.emails[0].subject")
+armed: bool   = state.get_bool("flight.is_armed")
+alt: float    = state.get_float("flight.altitude_m")
+raw: Any      = state.get("some.key")             # Raw value, any type
+
+# Prefix query
+inbox = state.keys_with_prefix("inbox.")
+
+# Confidence check
+if state.can_execute("send_reply"):
+    print("Safe to execute")
+
+# Action lookup
+schema = state.action("send_reply")
+print(schema.min_confidence_required)  # 0.95
+
+# Summary
+summary: nsp.AppSummary = state.summary()
+```
+
+---
+
+## Versioning
+
+`schema_version` follows semver. A version bump means:
+- **Patch** (`1.4.2 → 1.4.3`): A label correction was learned. State key meanings are unchanged.
+- **Minor** (`1.4.x → 1.5.0`): New state keys or actions discovered. Existing keys are unchanged.
+- **Major** (`1.x → 2.0.0`): Breaking change — key names restructured. Rare; only on app major updates.
+
+When `schema_version` changes, log it. If your agent hardcodes key names, verify they still exist in the new schema.

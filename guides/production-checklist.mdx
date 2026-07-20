@@ -1,0 +1,205 @@
+---
+title: "Production Checklist"
+description: "Everything to verify before running NSP agents in production environments."
+---
+
+## Pre-Launch Checklist
+
+Use this checklist before deploying an NSP-based agent to production.
+
+### Daemon Configuration
+
+<Steps>
+  <Step title="Enable authentication">
+    ```bash
+    # Verify auth is enabled
+    curl http://localhost:7842/health
+    # Look for: "auth_enabled": true
+    ```
+    If `false`, fix:
+    ```toml
+    [auth]
+    require_key = true
+    ```
+  </Step>
+  
+  <Step title="Bind to localhost only">
+    ```toml
+    [server]
+    host = "127.0.0.1"   # Not 0.0.0.0
+    ```
+  </Step>
+  
+  <Step title="Verify rate limits are on">
+    ```toml
+    [rate_limit]
+    enabled = true
+    action_per_second = 10  # Tune for your agent's needs
+    ```
+  </Step>
+  
+  <Step title="Persistent schema registry">
+    ```toml
+    [registry]
+    in_memory = false
+    db_path = "C:\\ProgramData\\Nelieo\\axon_registry.db"
+    ```
+    In-memory means the daemon relearns everything on restart — 90s warm-up per app.
+  </Step>
+  
+  <Step title="CORS locked down">
+    ```toml
+    [cors]
+    allow_all_origins = false
+    allowed_origins = ["http://your-dashboard.com"]
+    ```
+  </Step>
+  
+  <Step title="Log level appropriate">
+    ```toml
+    [logging]
+    level = "info"    # Not "debug" in production
+    format = "json"   # Structured for log aggregators
+    ```
+  </Step>
+</Steps>
+
+---
+
+### Agent Code
+
+<Steps>
+  <Step title="Handle NSPConnectionError">
+    Your agent must handle the case where the daemon isn't running:
+    ```python
+    try:
+        apps = await client.list_apps()
+    except nsp.NSPConnectionError:
+        logger.error("NSP daemon not running — start with: axon-daemon.exe run")
+        sys.exit(1)
+    ```
+  </Step>
+  
+  <Step title="verify=True on all irreversible actions">
+    Audit every `session.execute()` call that touches state:
+    ```python
+    # Bad — no verification on destructive action
+    await session.execute("delete", parameters={"email_id": id})
+    
+    # Good
+    await session.execute(
+        "delete",
+        parameters={"email_id": id},
+        verify=True,
+        verify_expression="inbox.total_count < before_total",
+    )
+    ```
+  </Step>
+  
+  <Step title="Confidence gate before critical actions">
+    ```python
+    if session.confidence < 0.95:
+        logger.warning("Confidence too low ({:.2f}), skipping action", session.confidence)
+        return
+    ```
+  </Step>
+  
+  <Step title="Use wait_for_app for robust startup">
+    ```python
+    # Instead of attach() which fails if app isn't ready:
+    session = await client.wait_for_app("Gmail", timeout=60.0)
+    ```
+  </Step>
+  
+  <Step title="Use streaming instead of polling">
+    ```python
+    # Bad — hammers the rate limit
+    while True:
+        state = await session.refresh()
+        await asyncio.sleep(0.5)
+    
+    # Good — zero polling overhead
+    async with session.watch(auto_refresh_on_event=True) as stream:
+        async for event in stream:
+            ...
+    ```
+  </Step>
+</Steps>
+
+---
+
+### Security
+
+- [ ] API key stored in environment variable, not hardcoded in source
+- [ ] `axon_keys.json` has restricted file permissions (owner read-only)
+- [ ] Daemon runs as a non-privileged Windows Service account
+- [ ] API key rotated after any team member with access leaves
+- [ ] Source code does not log API keys (check `repr()` outputs)
+
+---
+
+### Monitoring
+
+- [ ] `/health` endpoint polled by your monitoring system (Datadog, Prometheus, etc.)
+- [ ] Alerts configured on daemon restart (uptime reset)
+- [ ] `tracked_processes` drop to 0 alerts on daemon misconfiguration
+- [ ] Application logs exported to a centralized log aggregator
+- [ ] Rate limit 429 responses monitored — indicates agent needs backoff logic
+
+---
+
+### Load Testing
+
+Before going live with a high-frequency agent:
+
+```python
+import asyncio
+import time
+import nelieo_nsp as nsp
+
+async def load_test():
+    """Check how many state reads/second your daemon handles."""
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        session = await client.attach("Gmail")
+        
+        start = time.monotonic()
+        count = 0
+        errors = 0
+        
+        for _ in range(500):
+            try:
+                await session.refresh()
+                count += 1
+            except nsp.NSPRateLimitError:
+                errors += 1
+                await asyncio.sleep(0.01)
+        
+        elapsed = time.monotonic() - start
+        print(f"Completed {count} reads in {elapsed:.1f}s ({count/elapsed:.0f} req/s)")
+        print(f"Rate limit hits: {errors}")
+
+asyncio.run(load_test())
+```
+
+---
+
+### Deployment
+
+- [ ] `axon-daemon.exe install` run as Administrator to register as Windows Service
+- [ ] Service set to auto-restart on failure (Windows Service recovery settings)
+- [ ] Agent deployed as a separate process (not same process as daemon)
+- [ ] Agent process has restart logic (systemd / Windows Task Scheduler)
+- [ ] Backup of `axon_registry.db` scheduled (contains your app schemas)
+
+---
+
+## Common Production Issues
+
+| Symptom | Diagnosis | Fix |
+|---------|-----------|-----|
+| `NSPConnectionError` on startup | Daemon not started | `Start-Service NSPDaemon` |
+| `confidence: 0.0` after 30s | Chrome not launched with CDP port | Add `--remote-debugging-port=9222` |
+| `probe_status: "error"` | Probe crashed, retrying | Check daemon logs; usually transient |
+| 429 Too Many Requests | Agent polling too fast | Switch to WebSocket streaming |
+| Actions failing with `verification_failed` | App UI is slow to settle | Increase `verify_timeout_ms` |
+| `schema_version` keeps changing | App updated, NSP relearning | Normal; confidence drops briefly then recovers |

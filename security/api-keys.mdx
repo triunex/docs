@@ -1,0 +1,103 @@
+---
+title: "API Keys"
+description: "Generate, manage, and rotate NSP API keys."
+---
+
+## Generating Keys
+
+```bash
+# Generate a new key and register it with the daemon
+axon-daemon.exe keygen
+```
+
+**Output:**
+```
+✅ Generated new API key: sk_nsp_a1b2c3d4e5f6789...
+   Key ID: key_01j5abc123
+   Added to: C:\ProgramData\Nelieo\axon_keys.json
+   Label: (unlabeled)
+```
+
+### With a Label
+
+```bash
+axon-daemon.exe keygen --label "prod-agent-gmail"
+```
+
+Labels help you track which key is used by which agent.
+
+---
+
+## Keys File
+
+Keys are stored in `C:\ProgramData\Nelieo\axon_keys.json`:
+
+```json
+{
+  "keys": [
+    {
+      "id": "key_01j5abc123",
+      "key_hash": "blake3:a3f8c9d2e1b6f5...",
+      "label": "prod-agent-gmail",
+      "created_at": "2026-07-20T13:00:00Z",
+      "last_used_at": "2026-07-20T18:30:00Z",
+      "enabled": true
+    },
+    {
+      "id": "key_01j5xyz789",
+      "key_hash": "blake3:b4g9d0e2c7...",
+      "label": "dev-local",
+      "created_at": "2026-07-01T09:00:00Z",
+      "last_used_at": null,
+      "enabled": true
+    }
+  ]
+}
+```
+
+Keys are stored as **BLAKE3 hashes** — the plaintext key cannot be recovered from this file.
+
+---
+
+## Disabling a Key
+
+To revoke a key without deleting it (for audit trail), set `"enabled": false`:
+
+```json
+{
+  "id": "key_01j5abc123",
+  "key_hash": "blake3:...",
+  "enabled": false
+}
+```
+
+The daemon picks up changes to this file without restarting (hot reload, 5s polling).
+
+---
+
+## Key Rotation
+
+1. Generate a new key: `axon-daemon.exe keygen --label "prod-agent-v2"`
+2. Update your agent to use the new key
+3. Verify the new key works: `curl -H "X-Substrate-Key: sk_nsp_<new>" http://localhost:7842/health`
+4. Set `"enabled": false` on the old key
+5. After 24h with no errors, delete the old key entry
+
+---
+
+## Using Keys in Code
+
+```python
+# Option 1: Explicit (not recommended for production)
+client = nsp.NSPClient(api_key="sk_nsp_a1b2c3...")
+
+# Option 2: Environment variable (recommended)
+# Set NSP_API_KEY in your environment or .env file
+client = nsp.NSPClient()  # Reads NSP_API_KEY automatically
+
+# Option 3: Secrets manager (production)
+import boto3
+secrets = boto3.client("secretsmanager")
+api_key = secrets.get_secret_value(SecretId="prod/nsp-api-key")["SecretString"]
+client = nsp.NSPClient(api_key=api_key)
+```

@@ -1,0 +1,126 @@
+---
+title: "SDK Installation"
+description: "Install the nelieo-nsp Python SDK and verify your setup."
+---
+
+## Requirements
+
+| Requirement | Minimum Version |
+|-------------|----------------|
+| Python | 3.11 |
+| pip | 23.0+ |
+| NSP Daemon | 1.0.0+ |
+
+---
+
+## Install
+
+```bash
+pip install nelieo-nsp
+```
+
+### From a specific version
+
+```bash
+pip install "nelieo-nsp==1.0.0"
+```
+
+### With uv (recommended for new projects)
+
+```bash
+uv add nelieo-nsp
+```
+
+### Verify installation
+
+```python
+import nelieo_nsp as nsp
+print(nsp.__version__)  # 1.0.0
+```
+
+---
+
+## Dependencies
+
+The SDK depends on:
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `httpx` | `>=0.27` | Async HTTP client |
+| `pydantic` | `>=2.7` | Data validation and models |
+| `websockets` | `>=13.0` | WebSocket streaming |
+| `loguru` | `>=0.7` | Structured logging |
+
+All dependencies are installed automatically with `pip install nelieo-nsp`.
+
+---
+
+## Environment Variables
+
+Set these in your environment or `.env` file:
+
+```bash
+# Required (or pass api_key= to NSPClient)
+NSP_API_KEY=sk_nsp_your_key_here
+
+# Optional — override daemon host/port
+NSP_HOST=127.0.0.1
+NSP_PORT=7842
+```
+
+---
+
+## First Connection Test
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def test():
+    async with nsp.NSPClient() as client:
+        ok = await client.ping()
+        print(f"Daemon reachable: {ok}")
+        
+        if ok:
+            apps = await client.list_apps()
+            print(f"Tracked apps: {len(apps)}")
+            for app in apps:
+                print(f"  {app.app_name} ({app.runtime}) conf={app.confidence:.2f}")
+
+asyncio.run(test())
+```
+
+Expected output:
+```
+Daemon reachable: True
+Tracked apps: 2
+  Gmail (v8) conf=0.97
+  Mission Planner (clr) conf=0.95
+```
+
+---
+
+## Troubleshooting
+
+### `NSPConnectionError: Failed to connect`
+The daemon isn't running. Start it:
+```cmd
+axon-daemon.exe run
+```
+
+### `NSPAuthError: Invalid or missing key`
+Your API key is wrong or missing. Generate one:
+```cmd
+axon-daemon.exe keygen
+```
+Then set `NSP_API_KEY` or pass `api_key=` to `NSPClient`.
+
+### `NSPNotFoundError: App not found`
+The app isn't tracked yet. Check `await client.list_apps()` to see what's available. Make sure Chrome is running with `--remote-debugging-port=9222`.
+
+### Import Error
+Ensure Python 3.11+ is being used:
+```bash
+python --version  # Must be 3.11 or higher
+pip install --upgrade nelieo-nsp
+```

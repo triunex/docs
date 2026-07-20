@@ -1,0 +1,237 @@
+---
+title: "Error Handling"
+description: "The NSP exception hierarchy — what each error means and how to recover."
+---
+
+## Exception Hierarchy
+
+```python
+NSPError                          # Base class for all NSP errors
+├── NSPConnectionError            # Can't reach the daemon
+├── NSPAuthError                  # Invalid or missing API key
+├── NSPNotFoundError              # App/PID not found or not tracked
+├── NSPRateLimitError             # Too many requests — back off
+├── NSPTimeoutError               # Request or action timed out
+├── NSPConfidenceTooLowError      # State confidence too low to act
+├── NSPActionError                # Action executed but failed
+│   └── NSPIrreversibleNotConfirmedError  # Missing verify=True
+└── NSPServerError                # Unexpected daemon error (5xx)
+```
+
+---
+
+## Error Reference
+
+### `NSPConnectionError`
+
+The daemon is not running, not reachable at the configured host/port, or the connection was dropped.
+
+```python
+try:
+    apps = await client.list_apps()
+except nsp.NSPConnectionError as e:
+    print(f"Daemon unreachable: {e}")
+    print("Start with: axon-daemon.exe run")
+```
+
+**Common causes:**
+- Daemon not started
+- Wrong port (`AXON_SERVER__PORT` doesn't match client `port=`)
+- Firewall blocking localhost connections (rare)
+
+---
+
+### `NSPAuthError`
+
+The API key is missing, invalid, or disabled.
+
+```python
+try:
+    apps = await client.list_apps()
+except nsp.NSPAuthError as e:
+    print(f"Auth failed: {e}")
+    print("Generate a key: axon-daemon.exe keygen")
+```
+
+**Fields:** `e.code` (one of: `missing_key`, `invalid_key`, `disabled_key`)
+
+---
+
+### `NSPNotFoundError`
+
+The requested app or PID is not currently tracked by the daemon.
+
+```python
+try:
+    session = await client.attach("Gmail")
+except nsp.NSPNotFoundError as e:
+    print(f"App not found: {e}")
+    apps = await client.list_apps()
+    print(f"Available: {[a.app_name for a in apps]}")
+```
+
+**Recovery:** Use `client.wait_for_app()` if the app might still be launching.
+
+---
+
+### `NSPRateLimitError`
+
+You've exceeded the daemon's rate limit for this API key. Back off and retry.
+
+```python
+import asyncio
+
+async def with_backoff(fn, max_retries=5):
+    for attempt in range(max_retries):
+        try:
+            return await fn()
+        except nsp.NSPRateLimitError as e:
+            if attempt == max_retries - 1:
+                raise
+            wait = 2 ** attempt  # Exponential backoff: 1, 2, 4, 8, 16s
+            print(f"Rate limited. Retrying in {wait}s...")
+            await asyncio.sleep(wait)
+```
+
+**Default limits:** 100 state reads/sec, 10 actions/sec per API key. Configure in `axon.toml`.
+
+---
+
+### `NSPTimeoutError`
+
+The request took longer than the configured timeout.
+
+```python
+try:
+    state = await client.get_state(pid, fresh=True)
+except nsp.NSPTimeoutError:
+    # Fresh probe timed out — use cached state instead
+    state = await client.get_state(pid, fresh=False)
+```
+
+---
+
+### `NSPConfidenceTooLowError`
+
+The probe confidence is below the minimum required to execute the action.
+
+```python
+try:
+    await session.execute("send_reply", parameters={...}, verify=True)
+except nsp.NSPConfidenceTooLowError as e:
+    print(f"Confidence too low: {session.confidence:.2f}")
+    print("Wait for the probe to warm up, or trigger a fresh probe")
+    
+    # Wait for confidence to reach 0.95
+    await asyncio.sleep(5)
+    await session.refresh(fresh_probe=True)
+    # Retry
+```
+
+**When this happens:**
+- App was just detected and the first probe isn't complete
+- App navigated to a new view and confidence dropped
+- Native app with inherently low confidence
+
+---
+
+### `NSPActionError`
+
+The action was dispatched to the runtime but failed at the application level.
+
+```python
+try:
+    result = await session.execute("send_reply", parameters={...}, verify=True)
+except nsp.NSPActionError as e:
+    print(f"Action failed: {e.message}")
+    print(f"Error code: {e.code}")
+    print(f"Action: {e.action}")
+    print(f"Verification failed: {e.verification_failed}")
+```
+
+**Fields:**
+- `e.message` — human-readable failure message
+- `e.code` — machine-readable error code
+- `e.action` — action name that failed
+- `e.verification_failed` — whether the action ran but verification failed
+
+---
+
+### `NSPIrreversibleNotConfirmedError`
+
+You called `execute()` on an `IrreversibleWrite` action without setting `verify=True`.
+
+```python
+# This raises NSPIrreversibleNotConfirmedError:
+await session.execute("send_reply", parameters={...}, verify=False)
+
+# Fix:
+await session.execute(
+    "send_reply",
+    parameters={...},
+    verify=True,
+    verify_expression="inbox.sent_count > 0",
+)
+```
+
+The SDK enforces this check **before** sending the request to the daemon — no network round-trip wasted.
+
+---
+
+## Base Error Fields
+
+All `NSPError` subclasses have:
+
+```python
+e.message      # str — human-readable description
+e.code         # str — machine-readable error code
+e.status_code  # int — HTTP status code (0 for connection errors)
+```
+
+---
+
+## Recommended Error Handling Pattern
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def safe_execute(session, action, parameters):
+    """Execute an action with comprehensive error handling."""
+    try:
+        result = await session.execute(
+            action,
+            parameters=parameters,
+            verify=True,
+        )
+        return result
+        
+    except nsp.NSPConnectionError:
+        print("❌ Daemon connection lost — is axon-daemon running?")
+        raise
+        
+    except nsp.NSPAuthError:
+        print("❌ Invalid API key — run: axon-daemon.exe keygen")
+        raise
+        
+    except nsp.NSPConfidenceTooLowError:
+        print(f"⚠️  Confidence {session.confidence:.2f} — waiting for probe to warm up")
+        await asyncio.sleep(5)
+        await session.refresh(fresh_probe=True)
+        # Retry once
+        return await session.execute(action, parameters=parameters, verify=True)
+        
+    except nsp.NSPIrreversibleNotConfirmedError:
+        print(f"⚠️  Action '{action}' is irreversible. Set verify=True explicitly.")
+        raise
+        
+    except nsp.NSPActionError as e:
+        print(f"❌ Action '{action}' failed: {e.message}")
+        if e.verification_failed:
+            print("  The action ran but post-action state didn't match verify_expression.")
+        raise
+        
+    except nsp.NSPRateLimitError:
+        await asyncio.sleep(10)
+        return await session.execute(action, parameters=parameters, verify=True)
+```

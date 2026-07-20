@@ -1,0 +1,112 @@
+---
+title: "Daemon Installation"
+description: "Install the NSP daemon on Windows — installer, manual setup, and first-run verification."
+---
+
+## Windows Installer (Recommended)
+
+Download `Nelieo NSP Setup.exe` from [www.nelieo.com](https://www.nelieo.com/) and run as Administrator.
+
+The installer:
+1. Places `axon-daemon.exe` at `C:\Program Files\Nelieo\axon-daemon.exe`
+2. Adds `C:\Program Files\Nelieo` to `PATH`
+3. Creates `C:\ProgramData\Nelieo\axon.toml` with defaults
+4. Creates `C:\ProgramData\Nelieo\axon_keys.json` (empty)
+5. Registers `NSPDaemon` as an auto-start Windows Service
+6. Starts the daemon immediately
+
+**Verify:**
+```bash
+curl http://localhost:7842/health
+```
+
+---
+
+## Manual Installation
+
+### 1. Download the binary
+
+Download `axon-daemon.exe` directly from:
+```
+https://www.nelieo.com/download/axon-daemon-latest-windows-x64.exe
+```
+
+### 2. Place the binary
+
+```powershell
+# As Administrator:
+New-Item -ItemType Directory -Force -Path "C:\Program Files\Nelieo"
+Copy-Item axon-daemon.exe "C:\Program Files\Nelieo\"
+
+# Add to PATH
+$current = [Environment]::GetEnvironmentVariable("PATH", "Machine")
+[Environment]::SetEnvironmentVariable("PATH", "$current;C:\Program Files\Nelieo", "Machine")
+```
+
+### 3. Create config directory
+
+```powershell
+New-Item -ItemType Directory -Force -Path "C:\ProgramData\Nelieo"
+```
+
+### 4. Generate default config
+
+```powershell
+axon-daemon.exe init
+# Creates C:\ProgramData\Nelieo\axon.toml with defaults
+```
+
+### 5. Install as Windows Service
+
+```powershell
+# As Administrator:
+axon-daemon.exe install
+axon-daemon.exe start
+```
+
+---
+
+## Verify Installation
+
+```bash
+# Health check
+curl http://localhost:7842/health
+
+# Generate your first API key
+axon-daemon.exe keygen
+
+# Verify with auth
+curl -H "X-Substrate-Key: sk_nsp_<your-key>" \
+     http://localhost:7842/substrate/v1/apps
+```
+
+---
+
+## System Requirements
+
+| Component | Requirement |
+|-----------|-------------|
+| OS | Windows 10 1909+ or Windows 11 |
+| Architecture | x64 |
+| RAM | 512MB free (recommended: 2GB+ for large heap snapshots) |
+| Disk | 50MB for binary + schema database |
+| Admin rights | Required for installation and Windows Service registration |
+| Chrome | Required for V8/JavaScript app probing |
+| .NET 4.8+ | Required for CLR probe to function |
+| JDK 11+ | Required for JVM probe to function |
+
+---
+
+## Uninstall
+
+```powershell
+# Stop and remove the Windows Service
+axon-daemon.exe stop
+axon-daemon.exe uninstall
+
+# Remove binary and data (optional)
+Remove-Item -Recurse "C:\Program Files\Nelieo"
+Remove-Item -Recurse "C:\ProgramData\Nelieo"
+```
+
+Or use **Add/Remove Programs** if you used the installer.

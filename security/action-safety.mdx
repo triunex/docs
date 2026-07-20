@@ -1,0 +1,170 @@
+---
+title: "Action Safety"
+description: "How NSP enforces safety for destructive actions — the reversibility gate, verify_expression, and heuristic blocking."
+---
+
+## The Action Safety Contract
+
+Every action that changes application state goes through a three-layer safety gate before dispatch:
+
+```
+POST /substrate/v1/action
+  │
+  ├─ Layer 1: CDP Builtin Gate
+  │   Is the action in SAFETY_REQUIRED_BUILTINS?
+  │   → If yes, verify_expression required
+  │
+  ├─ Layer 2: Schema Reversibility Gate
+  │   Is action.reversibility == IrreversibleWrite?
+  │   → If yes, verify_expression required
+  │
+  └─ Layer 3: Heuristic Dangerous Name Gate
+      Can't resolve PID AND action name contains danger words?
+      → If yes, verify_expression required (or reject)
+```
+
+Only after all three gates pass does the action reach the `ActionDispatcher`.
+
+---
+
+## Layer 1: Reversibility Gate
+
+The action schema returned in `SubstrateState.actions` declares a `reversibility` for each action:
+
+| Reversibility | Confidence Required | verify_expression Required |
+|---------------|--------------------|-----------------------------|
+| `read` | 0.0+ | No |
+| `reversible_write` | 0.80+ | No (but recommended) |
+| `irreversible_write` | 0.95+ | **Yes — always** |
+
+```json
+// This action requires verify_expression:
+"send_reply": {
+  "reversibility": "irreversible_write",
+  ...
+}
+```
+
+**Error if missing:**
+```json
+{
+  "error": {
+    "code": "missing_verify_expression",
+    "message": "Action 'send_reply' is irreversible (IrreversibleWrite) and requires verify_expression. Add: {\"verify_expression\": \"changed('relevant.field')\"}"
+  }
+}
+```
+
+---
+
+## Layer 2: Heuristic Dangerous Names
+
+If the PID cannot be resolved at validation time (race condition between detection and schema load), the daemon checks the action name against a list of heuristically dangerous substrings:
+
+```rust
+fn is_known_dangerous_action(action: &str) -> bool {
+    let lower = action.to_lowercase();
+    lower.contains("delete")
+    || lower.contains("remove")
+    || lower.contains("destroy")
+    || lower.contains("drop")
+    || lower.contains("purge")
+    || lower.contains("wipe")
+    || lower.contains("reset")
+    || lower.contains("clear_all")
+    || lower.contains("empty")
+    || lower.contains("terminate")
+    || lower.contains("shutdown")
+    || lower.contains("kill")
+}
+```
+
+If the action name matches any of these patterns and `verify_expression` is missing, the request is rejected with `400`.
+
+---
+
+## verify_expression Syntax
+
+Verification expressions are evaluated against the post-action `SubstrateState.objects` map using a lightweight JS-style evaluator:
+
+```javascript
+// Field equality
+"inbox.emails[0].is_read == true"
+
+// Numeric comparison
+"flight.altitude_m > 45.0"
+
+// String equality
+"flight.mode == 'GUIDED'"
+
+// Logical AND
+"flight.is_armed == true && flight.altitude_m > 10.0"
+
+// Change detection
+"inbox.sent_count > 0"
+
+// Negation
+"inbox.emails[0].id != 'msg_18821af3'"
+```
+
+**Limits:**
+- Maximum 2048 bytes (configurable)
+- Must evaluate to a boolean
+
+---
+
+## verify_timeout_ms
+
+After an action executes, the daemon waits `post_action_wait_ms` (default: 200ms) for the app to settle, then polls state up to `verify_timeout_ms / 500ms` times.
+
+```json
+{
+  "action": "send_reply",
+  "parameters": { ... },
+  "verify_expression": "inbox.sent_count > 0",
+  "verify_timeout_ms": 5000   // Poll for up to 5 seconds
+}
+```
+
+**Verification failure → HTTP 422:**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "verification_failed",
+    "message": "Post-action verification failed for expression: inbox.sent_count > 0"
+  }
+}
+```
+
+---
+
+## SDK Safety
+
+The Python SDK adds an additional pre-flight check before sending any request:
+
+```python
+# This raises NSPIrreversibleNotConfirmedError BEFORE any HTTP request:
+await session.execute("send_reply", parameters={...}, verify=False)
+
+# The SDK auto-detects IrreversibleWrite from session.actions schema
+schema = session.actions.get("send_reply")
+if schema.reversibility == Reversibility.IRREVERSIBLE_WRITE:
+    if verify is False:
+        raise NSPIrreversibleNotConfirmedError(...)
+    verify = True  # Force verify=True
+```
+
+This means destructive actions can never be accidentally fired — the SDK rejects them before they hit the network.
+
+---
+
+## Best Practices
+
+1. **Always provide `verify_expression` for irreversible actions** — even if the daemon doesn't require it yet. Future schema versions may promote an action from `reversible_write` to `irreversible_write`.
+
+2. **Make expressions specific** — `"inbox.sent_count > 0"` is weaker than `"inbox.sent_count == 15"` (when you know the before value). The more specific, the more confident you can be the right action fired.
+
+3. **Set `verify_timeout_ms` appropriately** — email sending might need 5s; database writes might need 30s. The default 5s is appropriate for most UI actions.
+
+4. **Log `changed_fields` from verification** — it tells you exactly what changed, which helps debug unexpected outcomes.

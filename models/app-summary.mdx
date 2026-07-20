@@ -1,0 +1,85 @@
+---
+title: "AppSummary"
+description: "The lightweight listing model returned by GET /apps — status, confidence, and current context for each tracked app."
+---
+
+## Schema
+
+```typescript
+interface AppSummary {
+  pid: number;                    // OS process ID (>= 1)
+  app_id: string;                 // Stable semantic identifier
+  app_name: string;               // Human-readable name
+  runtime: RuntimeKind;           // "v8" | "jvm" | "clr" | "native" | "unknown"
+  runtime_name: string;           // "JavaScript (V8)" | ".NET CLR" | "JVM" | etc.
+  probe_status: string;           // Current probe lifecycle status
+  confidence: number;             // 0.0–1.0 probe quality
+  object_count: number;           // Number of SSF state objects
+  action_count: number;           // Number of available actions
+  last_captured_at: string | null; // ISO 8601 timestamp of latest snapshot
+  has_state: boolean;             // Whether a state snapshot is available
+  current_view: string | null;    // Semantic view name (V8 apps)
+  current_url: string | null;     // Current URL (browser/Electron apps)
+}
+```
+
+---
+
+## `probe_status` Values
+
+| Status | Description |
+|--------|-------------|
+| `detecting` | PID found, runtime classification in progress |
+| `attaching` | Connecting to the runtime (CDP handshake, JVMTI attach, CLR inject) |
+| `cold_probe` | First full state extraction running (can take 3–90s) |
+| `active` | Fast poll loop running — state is fresh |
+| `error` | Last probe attempt failed — daemon retrying |
+| `detached` | Process exited — state cleaned up |
+
+---
+
+## Example
+
+```json
+{
+  "pid": 12847,
+  "app_id": "gmail-chrome-12847",
+  "app_name": "Gmail",
+  "runtime": "v8",
+  "runtime_name": "JavaScript (V8)",
+  "probe_status": "active",
+  "confidence": 0.97,
+  "object_count": 23,
+  "action_count": 5,
+  "last_captured_at": "2026-07-20T13:00:00Z",
+  "has_state": true,
+  "current_view": "gmail_inbox",
+  "current_url": "https://mail.google.com/mail/u/0/#inbox"
+}
+```
+
+---
+
+## Python SDK
+
+```python
+apps = await client.list_apps()
+
+for app in apps:
+    # All fields as typed attributes
+    print(app.pid)                  # 12847
+    print(app.app_name)             # "Gmail"
+    print(app.runtime)              # RuntimeKind.V8
+    print(app.probe_status)         # "active"
+    print(app.confidence)           # 0.97
+    print(app.has_state)            # True
+    print(app.current_url)          # "https://mail.google.com/..."
+    
+    # Human-readable string
+    print(str(app))
+    # "Gmail (pid=12847, runtime=v8, status=active, conf=0.97)"
+    
+    # Check if ready to use
+    if app.has_state and app.confidence >= 0.80:
+        session = await client.session(app.pid)
+```

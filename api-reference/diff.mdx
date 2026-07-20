@@ -1,0 +1,55 @@
+---
+title: "GET /diff/{pid}"
+description: "Get the field-level state diff between the last two probe cycles."
+---
+
+## Endpoint
+
+```http
+GET /substrate/v1/diff/{pid}
+Authorization: X-Substrate-Key: <key>
+```
+
+Returns the before/after diff between the two most recent successful probe cycles. Useful for debugging what changed after an action.
+
+---
+
+## Response
+
+```json
+{
+  "pid": 12847,
+  "app_id": "gmail-chrome-12847",
+  "diff": [
+    {
+      "path": "inbox.unread_count",
+      "before": 48,
+      "after": 47
+    },
+    {
+      "path": "inbox.emails[0].is_read",
+      "before": false,
+      "after": true
+    }
+  ],
+  "captured_at": "2026-07-20T13:00:00Z",
+  "previous_capture_id": "0196f4a1-...",
+  "current_capture_id": "0196f4a2-..."
+}
+```
+
+---
+
+## Example
+
+```bash
+curl -H "X-Substrate-Key: sk_nsp_..." \
+     http://localhost:7842/substrate/v1/diff/12847
+```
+
+---
+
+## Notes
+
+- Returns an empty `diff` array if state hasn't changed since the last cycle.
+- Returns `404` if there are fewer than two probe cycles for the given PID (app just started).

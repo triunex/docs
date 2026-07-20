@@ -1,0 +1,235 @@
+---
+title: "Guide: .NET Agent (Mission Planner)"
+description: "Build an AI agent for Mission Planner — read MAVLink telemetry, invoke .NET methods, and control a drone via NSP's CLR probe."
+---
+
+## Overview
+
+Mission Planner is a popular open-source Ground Control Station (GCS) built in C# (.NET 4.8). This guide shows how to use NSP's CLR probe to:
+
+1. Read live flight telemetry (altitude, GPS, battery, flight mode)
+2. Invoke .NET methods to control the drone
+3. Set waypoints and trigger autonomous flight modes
+4. Monitor mission progress with real-time streaming
+
+---
+
+## Prerequisites
+
+- Mission Planner installed and connected to a drone (or SITL simulator)
+- NSP daemon running
+- `pip install nelieo-nsp`
+
+The daemon auto-detects Mission Planner once it's running. No configuration needed.
+
+---
+
+## Step 1: Verify Detection
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def main():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        apps = await client.list_apps()
+        for app in apps:
+            print(f"{app.app_name} | {app.runtime} | conf={app.confidence:.2f}")
+
+asyncio.run(main())
+# Output: Mission Planner | clr | conf=0.95
+```
+
+---
+
+## Step 2: Read Telemetry
+
+```python
+async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    session = await client.attach("Mission Planner")
+    
+    # Read standard SSF state (normalized by the CLR probe)
+    alt = session.get_float("flight.altitude_m")
+    lat = session.get_float("flight.gps.latitude")
+    lon = session.get_float("flight.gps.longitude")
+    mode = session.get_str("flight.mode")
+    armed = session.get_bool("flight.is_armed")
+    battery = session.get_float("flight.battery_voltage")
+    
+    print(f"Position: {lat:.6f}, {lon:.6f}  Alt: {alt:.1f}m")
+    print(f"Mode: {mode}  Armed: {armed}  Battery: {battery:.1f}V")
+```
+
+---
+
+## Step 3: Read .NET Fields Directly
+
+When you need data beyond the normalized SSF state, read CLR fields directly:
+
+```python
+# Read from specific .NET types
+mavlink = await session.clr.read_field("MAVLink.MAVLinkInterface", "IsArmed")
+gps_status = await session.clr.read_field("MAVLink.MAVLinkInterface", "GPSStatus")
+heading = await session.clr.read_field("MissionPlanner.FlightData", "heading")
+
+# Read multiple fields at once
+telemetry = await session.clr.read_fields(
+    "MissionPlanner.FlightData",
+    "alt", "groundspeed", "airspeed", "heading",
+    "battery_voltage", "battery_remaining",
+)
+print(f"Alt={telemetry['alt']:.1f}m  GS={telemetry['groundspeed']:.1f}m/s")
+
+# Full type heap snapshot
+objects = await session.clr.heap_snapshot(include_prefix="MAVLink")
+for obj in objects:
+    if "Interface" in obj["type_name"]:
+        print(obj["type_name"], obj["fields"])
+```
+
+---
+
+## Step 4: Invoke .NET Methods
+
+```python
+# Get status text from the GCS
+status = await session.clr.invoke("MissionPlanner.MainV2", "GetStatusText")
+print(f"GCS Status: {status}")
+
+# Set flight mode
+await session.clr.invoke("MissionPlanner.GCS", "setMode", ["GUIDED"])
+
+# Arm the vehicle
+await session.clr.invoke("MissionPlanner.MainV2", "doArm", [True])
+
+# Set a waypoint
+await session.clr.invoke(
+    "MissionPlanner.NavController",
+    "SetWaypoint",
+    [34.0522, -118.2437, 50.0],  # lat, lon, alt_m
+)
+```
+
+---
+
+## Step 5: Use NSP Actions
+
+The CLR probe also discovers NSP-native actions from the schema:
+
+```python
+# See available actions
+for name, schema in session.actions.items():
+    print(f"{name}: {schema.signature}")
+    
+# Arm motors (reversible — just arms, doesn't fly)
+result = await session.execute("arm_motors", parameters={})
+
+# Take off to 50m (irreversible — vehicle lifts off)
+result = await session.execute(
+    "take_off",
+    parameters={"altitude_m": 50.0},
+    verify=True,
+    verify_expression="flight.altitude_m > 45.0",
+    verify_timeout_ms=30000,  # 30s for takeoff to complete
+)
+print(f"Takeoff: {result.success}")
+```
+
+---
+
+## Step 6: Stream Telemetry
+
+```python
+async def monitor_flight():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        session = await client.attach("Mission Planner")
+        
+        print("Monitoring flight (Ctrl+C to stop)...")
+        
+        async with session.watch(auto_refresh_on_event=True) as stream:
+            async for event in stream:
+                if not any(k.startswith("flight.") for k in event.changed_keys):
+                    continue
+                
+                alt = session.get_float("flight.altitude_m")
+                mode = session.get_str("flight.mode")
+                armed = session.get_bool("flight.is_armed")
+                gs = session.get_float("flight.groundspeed")
+                
+                print(f"  Alt={alt:.1f}m  GS={gs:.1f}m/s  Mode={mode}  Armed={armed}")
+                
+                # Safety: RTL if battery low
+                batt = session.get_float("flight.battery_remaining")
+                if batt < 20.0 and armed:
+                    print("⚠️  Battery low — returning to launch!")
+                    await session.execute(
+                        "set_mode",
+                        parameters={"mode": "RTL"},
+                        verify=True,
+                        verify_expression="flight.mode == 'RTL'",
+                    )
+
+asyncio.run(monitor_flight())
+```
+
+---
+
+## Full Example: Autonomous Waypoint Mission
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+WAYPOINTS = [
+    (34.0522, -118.2437, 50.0),  # Start
+    (34.0600, -118.2400, 60.0),  # WP1
+    (34.0650, -118.2350, 60.0),  # WP2
+    (34.0522, -118.2437, 50.0),  # Return home
+]
+
+async def run_mission():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        session = await client.attach("Mission Planner")
+        print(f"Connected. Confidence: {session.confidence:.2f}")
+        
+        # Arm
+        await session.clr.invoke("MissionPlanner.MainV2", "doArm", [True])
+        
+        # Wait for arming
+        await session.wait_for(
+            lambda s: s.get_bool("flight.is_armed"),
+            timeout=15.0,
+        )
+        print("Armed ✓")
+        
+        # Set GUIDED mode
+        await session.clr.invoke("MissionPlanner.GCS", "setMode", ["GUIDED"])
+        
+        # Take off
+        await session.execute(
+            "take_off",
+            parameters={"altitude_m": 50.0},
+            verify=True,
+            verify_expression="flight.altitude_m > 45.0",
+            verify_timeout_ms=30000,
+        )
+        print("Airborne ✓")
+        
+        # Fly waypoints
+        for i, (lat, lon, alt) in enumerate(WAYPOINTS):
+            print(f"→ Waypoint {i+1}: ({lat:.4f}, {lon:.4f}, {alt}m)")
+            await session.clr.invoke(
+                "MissionPlanner.NavController", "SetWaypoint", [lat, lon, alt]
+            )
+            # Wait until we're within 5m of target altitude
+            await session.wait_for(
+                lambda s: abs(s.get_float("flight.altitude_m") - alt) < 5.0,
+                timeout=60.0,
+                fresh_probe=True,
+            )
+        
+        print("Mission complete — landing")
+        await session.clr.invoke("MissionPlanner.GCS", "setMode", ["LAND"])
+
+asyncio.run(run_mission())
+```

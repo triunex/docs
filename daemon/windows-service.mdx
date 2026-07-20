@@ -1,0 +1,131 @@
+---
+title: "Windows Service"
+description: "Run the NSP daemon as a Windows Service — installation, lifecycle management, and recovery configuration."
+---
+
+## Overview
+
+The NSP daemon is designed to run as a **Windows Service** (`NSPDaemon`) that:
+- Starts automatically when Windows boots
+- Runs without a logged-in user session
+- Restarts automatically on failure
+- Integrates with Windows Event Log and Services management
+
+---
+
+## Install the Service
+
+```powershell
+# Run as Administrator
+axon-daemon.exe install
+```
+
+**Output:**
+```
+✅ Service 'NSPDaemon' installed successfully
+   Display name: NSP Daemon
+   Start type: Automatic
+   Restart on failure: Yes (3 attempts, 30s delay)
+```
+
+---
+
+## Service Management
+
+```powershell
+# Start
+Start-Service -Name NSPDaemon
+
+# Stop
+Stop-Service -Name NSPDaemon
+
+# Restart
+Restart-Service -Name NSPDaemon
+
+# Check status
+Get-Service -Name NSPDaemon
+
+# View in GUI
+services.msc
+```
+
+---
+
+## Recovery Settings
+
+By default, the installer configures the service to restart automatically on failure:
+
+- **First failure:** Restart after 30 seconds
+- **Second failure:** Restart after 60 seconds
+- **Subsequent failures:** Restart after 120 seconds
+
+To modify recovery settings via PowerShell:
+
+```powershell
+sc.exe failure NSPDaemon reset= 86400 actions= restart/30000/restart/60000/restart/120000
+```
+
+---
+
+## Uninstall the Service
+
+```powershell
+# Stop first, then uninstall
+Stop-Service -Name NSPDaemon
+axon-daemon.exe uninstall
+```
+
+---
+
+## Running as a Different User Account
+
+By default, the service runs as **Local System**. For production environments, create a dedicated low-privilege account:
+
+```powershell
+# Create a dedicated service account
+New-LocalUser -Name "nsp-service" -NoPassword -Description "NSP Daemon service account"
+
+# Grant access to config directory
+$acl = Get-Acl "C:\ProgramData\Nelieo"
+$rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+    "nsp-service", "Modify", "ContainerInherit,ObjectInherit", "None", "Allow"
+)
+$acl.SetAccessRule($rule)
+Set-Acl "C:\ProgramData\Nelieo" $acl
+
+# Configure service to run as this user
+sc.exe config NSPDaemon obj= ".\nsp-service" password= ""
+```
+
+---
+
+## Windows Event Log
+
+The daemon writes events to Windows Event Log under **Application** source `NSPDaemon`:
+
+```powershell
+# View recent daemon events
+Get-EventLog -LogName Application -Source NSPDaemon -Newest 50
+
+# Or use Event Viewer:
+eventvwr.msc
+# → Windows Logs → Application → Filter by Source = NSPDaemon
+```
+
+---
+
+## Running in Foreground (Development)
+
+If you need interactive output (e.g., debugging probe issues):
+
+```powershell
+# Stop the service first
+Stop-Service -Name NSPDaemon
+
+# Run in foreground with debug logging
+axon-daemon.exe run --log-level debug
+
+# Ctrl+C to stop
+```
+
+This is the same binary as the service — `run` is just a different startup mode.

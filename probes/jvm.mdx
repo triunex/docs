@@ -1,0 +1,135 @@
+---
+title: "JVM / Java Probe"
+description: "How NSP reads state from and invokes methods in Java applications using the JVMTI agent."
+---
+
+## What the JVM Probe Does
+
+The `axon-jvmti` crate attaches to running Java Virtual Machine processes using the **JVMTI (JVM Tool Interface)** — the same mechanism used by production profilers like YourKit and JProfiler. It:
+
+1. **Attaches** a native JVMTI agent to the running JVM via the JVM Attach API (no restart required)
+2. **Enumerates** loaded classes and their field values using JNI reflection
+3. **Invokes** methods on live Java objects with typed argument coercion
+4. **Normalizes** the extracted data to SSF `SubstrateState` format
+
+---
+
+## Architecture
+
+```
+axon-daemon (Rust)
+  │
+  ├─ JvmSession::attach(pid)
+  │   └─ com.sun.tools.attach.VirtualMachine.attach(pid)
+  │       └─ Loads: axon_jvmti_agent.jar
+  │
+  │─ JVMTI Agent (native + managed)
+  │   ├─ Class enumeration (JVMTI GetLoadedClasses)
+  │   ├─ Field reads (JNI GetFieldID → GetObjectField)
+  │   └─ Method invoke (JNI GetMethodID → CallObjectMethod)
+  │
+  └─ Response over JVM-side socket/MMF → Rust JvmSession
+```
+
+**Key difference from CLR:** The JVMTI agent runs inside the JVM thread pool. All field reads and method invocations happen on a JVM thread — the target JVM is never paused (unlike heap dump approaches).
+
+---
+
+## SDK: JVM Session Proxy
+
+Access JVM-specific operations via `session.jvm`:
+
+### Read a Field
+
+```python
+# Read altitude from ArduPilot GCS
+alt = await session.jvm.read_field("com.ardupilot.GCS", "altitude")
+print(f"Altitude: {alt:.1f}m")
+
+# Read flight mode
+mode = await session.jvm.read_field("com.ardupilot.GCS", "flightMode")
+print(f"Mode: {mode}")  # "GUIDED", "AUTO", "MANUAL", etc.
+```
+
+### Invoke a Method
+
+```python
+# Parameterless method
+result = await session.jvm.invoke("com.ardupilot.GCS", "getStatusText")
+print(result)  # "OK: 3D GPS Fix"
+
+# With arguments — Python types auto-coerced to JVM types
+await session.jvm.invoke(
+    "com.ardupilot.WaypointManager",
+    "addWaypoint",
+    [34.052, -118.243, 150.0],  # lat (double), lon (double), alt (double)
+)
+
+# String argument
+await session.jvm.invoke(
+    "com.ardupilot.GCS",
+    "setMode",
+    ["GUIDED"],
+)
+```
+
+---
+
+## Type Coercion
+
+| Python Type | JVM Type |
+|------------|----------|
+| `bool` | `boolean` / `Boolean` |
+| `int` | `int`, `long`, `short`, `byte` |
+| `float` | `double`, `float` |
+| `str` | `String` |
+| `list` | `List<T>`, `T[]` |
+| `dict` | `Map<String, Object>` |
+| `None` | `null` |
+
+---
+
+## Internal Action Protocol
+
+JVM actions use the `__jvm_invoke__` internal reserved action:
+
+```python
+# SDK: session.jvm.invoke("com.ardupilot.GCS", "getStatusText")
+
+# Wire format (POST /substrate/v1/action):
+{
+    "app_id": "ardupilot-gcs-4521",
+    "action": "__jvm_invoke__",
+    "parameters": {
+        "class": "com.ardupilot.GCS",
+        "method": "getStatusText",
+        "timeout_ms": 10000
+    }
+}
+```
+
+---
+
+## Supported Applications
+
+| Application | Package Prefix | Notes |
+|-------------|---------------|-------|
+| ArduPilot GCS (Java) | `com.ardupilot` | Full MAVLink state |
+| Eclipse IDE | `org.eclipse` | Project and editor state |
+| IntelliJ IDEA | `com.intellij` | Project/file state |
+| Jenkins | `hudson`, `jenkins` | Build pipeline state |
+| Apache Kafka | `org.apache.kafka` | Topic/consumer state |
+| Elasticsearch | `org.elasticsearch` | Index/cluster state |
+| Any Spring Boot app | `com.yourapp` | Via field/method introspection |
+
+---
+
+## Error Handling
+
+| Error Code | Description |
+|-----------|-------------|
+| `jvm_not_attached` | JVMTI agent not loaded yet — wait for probe |
+| `jvm_class_not_found` | Class not loaded in target JVM |
+| `jvm_method_not_found` | Method name or signature mismatch |
+| `jvm_invoke_timeout` | Method didn't return within `timeout_ms` |
+| `jvm_type_error` | Argument type cannot be coerced to target JVM type |

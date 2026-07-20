@@ -1,0 +1,146 @@
+---
+title: "Guide: Java Agent (ArduPilot)"
+description: "Build an AI agent for ArduPilot GCS — read MAVLink telemetry, set flight modes, and control waypoints using the JVM probe."
+---
+
+## Overview
+
+ArduPilot GCS is a Java-based ground control station. This guide shows how NSP's JVM probe reads live MAVLink telemetry and invokes Java methods to control flight operations.
+
+---
+
+## Prerequisites
+
+- ArduPilot GCS running (real or SITL)
+- NSP daemon running
+- `pip install nelieo-nsp`
+
+The daemon auto-detects ArduPilot GCS by process name.
+
+---
+
+## Read Live Telemetry
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def main():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        session = await client.wait_for_app("ArduPilot GCS", timeout=30.0)
+        print(f"Connected. Confidence: {session.confidence:.2f}")
+        
+        # Standard NSP state (normalized SSF)
+        alt = session.get_float("flight.altitude_m")
+        mode = session.get_str("flight.mode")
+        armed = session.get_bool("flight.is_armed")
+        sats = session.get_int("flight.gps.satellites")
+        
+        print(f"Alt={alt:.1f}m  Mode={mode}  Armed={armed}  Sats={sats}")
+        
+        # Direct Java field access
+        heading = await session.jvm.read_field("com.ardupilot.GCS", "heading")
+        gs = await session.jvm.read_field("com.ardupilot.GCS", "groundspeed")
+        
+        # Status text
+        status = await session.jvm.invoke("com.ardupilot.GCS", "getStatusText")
+        print(f"Status: {status}")
+
+asyncio.run(main())
+```
+
+---
+
+## Set Flight Mode
+
+```python
+# Set mode via JVM invoke
+await session.jvm.invoke("com.ardupilot.GCS", "setMode", ["GUIDED"])
+
+# Wait for mode to change
+await session.wait_for(
+    lambda s: s.get_str("flight.mode") == "GUIDED",
+    timeout=10.0,
+)
+print("Mode set to GUIDED ✓")
+```
+
+---
+
+## Add a Waypoint
+
+```python
+# Add a waypoint (lat, lon, alt_m)
+await session.jvm.invoke(
+    "com.ardupilot.WaypointManager",
+    "addWaypoint",
+    [34.0522, -118.2437, 50.0],
+)
+
+count = await session.jvm.invoke(
+    "com.ardupilot.WaypointManager",
+    "getWaypointCount",
+)
+print(f"Total waypoints: {count}")
+```
+
+---
+
+## Arm and Takeoff
+
+```python
+# Arm via NSP action
+result = await session.execute(
+    "arm_motors",
+    parameters={},
+    verify=True,
+    verify_expression="flight.is_armed == true",
+    verify_timeout_ms=15000,
+)
+print(f"Armed: {result.success}")
+
+# Takeoff to 50m
+result = await session.execute(
+    "take_off",
+    parameters={"altitude_m": 50.0},
+    verify=True,
+    verify_expression="flight.altitude_m > 45.0",
+    verify_timeout_ms=30000,
+)
+print(f"Airborne: {result.success}")
+```
+
+---
+
+## Continuous Telemetry Stream
+
+```python
+async def stream_telemetry():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        session = await client.wait_for_app("ArduPilot GCS")
+        
+        print("Streaming telemetry...")
+        async with session.watch(auto_refresh_on_event=True) as stream:
+            async for event in stream:
+                if not any(k.startswith("flight.") for k in event.changed_keys):
+                    continue
+                
+                alt = session.get_float("flight.altitude_m")
+                mode = session.get_str("flight.mode")
+                batt = session.get_float("flight.battery_remaining")
+                lat = session.get_float("flight.gps.latitude")
+                lon = session.get_float("flight.gps.longitude")
+                
+                print(
+                    f"[{event.captured_at}] "
+                    f"Pos=({lat:.4f},{lon:.4f}) "
+                    f"Alt={alt:.1f}m  Mode={mode}  Batt={batt:.0f}%"
+                )
+                
+                # RTL if battery critical
+                if batt < 15.0:
+                    print("⚠️  Critical battery — commanding RTL")
+                    await session.jvm.invoke("com.ardupilot.GCS", "setMode", ["RTL"])
+
+asyncio.run(stream_telemetry())
+```

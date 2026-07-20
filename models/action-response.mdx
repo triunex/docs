@@ -1,0 +1,129 @@
+---
+title: "ActionResponse"
+description: "The response from POST /substrate/v1/action — success, latency, verification outcome, and state delta."
+---
+
+## Schema
+
+```typescript
+interface ActionResponse {
+  success: boolean;               // true if action ran AND verification passed
+  action_id: string;              // UUIDv7 — unique execution ID
+  action: string;                 // Action name that was executed
+  executed: boolean;              // Whether the action itself ran (false on pre-flight failure)
+  runtime: RuntimeKind;           // Runtime used: "v8" | "jvm" | "clr" | "native"
+  total_latency_ms: number;       // Total wall time from request to response
+  message: string;                // Human-readable status message
+  verification?: VerificationOutcome | null;  // Post-action verification result
+  updated_state?: SubstrateState | null;      // Full updated state after action
+  state_delta?: Record<string, any> | null;   // Before/after field diff
+  raw_return?: any | null;                    // Return value (JVM/CLR invocations)
+  jvm_invoke_snapshot?: any | null;           // Post-invoke field snapshot (CLR)
+}
+```
+
+---
+
+## `VerificationOutcome`
+
+```typescript
+interface VerificationOutcome {
+  passed: boolean;               // Whether the expression evaluated to true
+  expression: string;            // The expression that was evaluated
+  computed_value: any | null;    // The evaluated result value
+  explanation: string;           // Human-readable explanation
+  latency_ms: number;            // Time spent polling (ms)
+  poll_cycles: number;           // Number of probe cycles polled
+  changed_fields: FieldDiff[];   // Fields that changed
+}
+
+interface FieldDiff {
+  path: string;    // Dot-notation state key
+  before: any;     // Value before the action
+  after: any;      // Value after the action
+}
+```
+
+---
+
+## Example
+
+```json
+{
+  "success": true,
+  "action_id": "01j5abc123def456",
+  "action": "send_reply",
+  "executed": true,
+  "runtime": "v8",
+  "total_latency_ms": 312,
+  "message": "Action executed and verified successfully",
+  "verification": {
+    "passed": true,
+    "expression": "inbox.sent_count > 0",
+    "computed_value": true,
+    "explanation": "Expression evaluated to true after 2 poll cycles (280ms)",
+    "latency_ms": 280,
+    "poll_cycles": 2,
+    "changed_fields": [
+      { "path": "inbox.sent_count", "before": 14, "after": 15 },
+      { "path": "inbox.emails[0].is_read", "before": false, "after": true }
+    ]
+  },
+  "state_delta": {
+    "inbox.sent_count": { "before": 14, "after": 15 }
+  },
+  "raw_return": null
+}
+```
+
+---
+
+## Failure Response
+
+When `success: false`:
+
+```json
+{
+  "success": false,
+  "action_id": "01j5abc789",
+  "action": "send_reply",
+  "executed": true,
+  "runtime": "v8",
+  "total_latency_ms": 5312,
+  "message": "Verification failed",
+  "verification": {
+    "passed": false,
+    "expression": "inbox.sent_count > 14",
+    "computed_value": false,
+    "explanation": "inbox.sent_count remained 14 after 10 poll cycles",
+    "latency_ms": 5000,
+    "poll_cycles": 10,
+    "changed_fields": []
+  }
+}
+```
+
+**HTTP status for verification failure:** `422 Unprocessable Entity`
+
+---
+
+## Python SDK
+
+```python
+result = await session.execute("archive", parameters={"email_id": "msg_abc"})
+
+result.success           # True
+result.latency_ms        # 85 (alias for total_latency_ms)
+result.total_latency_ms  # 85
+result.executed          # True
+
+# Verification details (if verify_expression was provided)
+if result.verification:
+    print(result.verification.passed)        # True/False
+    print(result.verification.poll_cycles)   # 2
+    print(result.verification.changed_fields) # [FieldDiff(path=..., before=..., after=...)]
+
+# For CLR/JVM invocations
+if result.raw_return:
+    print(result.raw_return)  # Method return value
+```

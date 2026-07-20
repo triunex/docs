@@ -1,0 +1,201 @@
+---
+title: "CLR / .NET Probe"
+description: "How NSP reads state from and invokes methods in C#, VB.NET, WinForms, WPF, and .NET apps using the CLR managed bridge."
+---
+
+## What the CLR Probe Does
+
+The `axon-clr` crate attaches to running .NET applications — Mission Planner, WinForms apps, WPF apps, Visual Studio, and any .NET 4.x / .NET 6+ process — and provides:
+
+1. **Semantic state extraction** — reads the CLR heap via `ICorProfiler`-style managed reflection and normalizes it to SSF
+2. **Direct method invocation** — calls .NET methods with typed arguments via a Memory-Mapped File (MMF) bridge
+3. **Live field monitoring** — continuous polling for JIT-compiled field values without pausing the target process
+
+---
+
+## Architecture
+
+The CLR probe uses a **two-process architecture** with a managed C# bridge:
+
+```
+axon-daemon (native Rust)
+  │
+  ├─ Injects: axon_clr_bridge.dll (managed C# assembly)
+  │   via Windows CLR Hosting API (ICLRRuntimeHost)
+  │
+  │─ Memory-Mapped File (MMF): \\axon-clr-{pid}
+  │   ┌─────────────────────────────────────────────────┐
+  │   │ Command: { action, type_name, method, args }     │
+  │   │ Response: { success, return_value, fields }      │
+  │   └─────────────────────────────────────────────────┘
+  │
+  └── Target .NET Process
+        └─ axon_clr_bridge.dll running in target AppDomain
+              ├─ CLR Heap Walk (Assembly.GetTypes() + reflection)
+              ├─ Method Invoke (MethodInfo.Invoke())
+              └─ Field Read (FieldInfo.GetValue())
+```
+
+**Why MMF instead of named pipes?**  
+MMF communication is synchronous and zero-copy. The managed bridge writes the response directly to the shared memory region — no serialization overhead, no buffering latency.
+
+---
+
+## CLR Session
+
+A `ClrSession` object is maintained per tracked process:
+
+```rust
+pub struct ClrSession {
+    pub pid: u32,
+    pub mmf: MemoryMappedFile,  // Shared memory channel
+    pub is_connected: bool,
+}
+
+impl ClrSession {
+    pub async fn invoke(&self, type_name: &str, method: &str, args: &[Value]) -> Result<Value>;
+    pub async fn heap_walk(&self, include_prefix: &str, max_instances: usize) -> Result<Vec<HeapObject>>;
+    pub async fn read_field(&self, type_name: &str, field: &str) -> Result<Value>;
+}
+```
+
+---
+
+## SDK: CLR Session Proxy
+
+Access CLR-specific operations via `session.clr`:
+
+### Read a Single Field
+
+```python
+# Read IsArmed from the MAVLink interface (Mission Planner)
+armed = await session.clr.read_field("MAVLink.MAVLinkInterface", "IsArmed")
+print(f"Armed: {armed}")  # True / False
+
+# Read altitude from FlightData
+alt = await session.clr.read_field("MissionPlanner.FlightData", "alt")
+print(f"Altitude: {alt:.1f}m")
+```
+
+### Read Multiple Fields
+
+```python
+vals = await session.clr.read_fields(
+    "MissionPlanner.FlightData",
+    "alt", "groundspeed", "battery_voltage", "heading"
+)
+print(f"Alt={vals['alt']:.1f}m  GS={vals['groundspeed']:.1f}m/s")
+```
+
+### Invoke a Method
+
+```python
+# Parameterless
+status = await session.clr.invoke("MissionPlanner.MainV2", "GetStatusText")
+
+# With typed arguments — automatic Python → .NET type coercion
+await session.clr.invoke(
+    "MissionPlanner.NavController",
+    "SetWaypoint",
+    [34.052, -118.243, 150.0],  # lat (double), lon (double), alt (double)
+)
+
+# String argument
+await session.clr.invoke(
+    "MissionPlanner.GCS",
+    "SetMode",
+    ["GUIDED"],
+)
+```
+
+### Heap Snapshot
+
+Walk the full CLR heap for a type namespace:
+
+```python
+objects = await session.clr.heap_snapshot(
+    include_prefix="MAVLink",   # Only types starting with "MAVLink"
+    max_instances=32,           # Max objects to return
+    timeout_ms=30_000,          # How long to wait
+)
+
+for obj in objects:
+    print(obj["type_name"], obj["fields"])
+    # MAVLink.MAVLinkInterface  {'IsArmed': True, 'alt': 42.7, ...}
+    # MAVLink.Locationwp        {'lat': 34.052, 'lng': -118.243, ...}
+```
+
+---
+
+## Supported .NET Type Coercion
+
+When invoking methods, the managed bridge automatically coerces Python types to the target .NET parameter types:
+
+| Python Type | .NET Target Types |
+|------------|-------------------|
+| `bool` | `bool`, `Boolean` |
+| `int` | `int`, `long`, `short`, `byte`, `uint`, ... |
+| `float` | `double`, `float`, `decimal` |
+| `str` | `string`, `String` |
+| `str` (GUID format) | `Guid` |
+| `str` (ISO 8601) | `DateTime`, `DateTimeOffset` |
+| `list` | `T[]`, `List<T>`, `IEnumerable<T>` |
+| `dict` | `Dictionary<string, T>` |
+| `None` | `null` |
+| `str` (enum name) | Any `enum` type |
+
+---
+
+## Internal Action Protocol
+
+When the SDK calls `session.clr.read_field()` or `session.clr.invoke()`, it posts to the daemon's action endpoint using internal reserved action names:
+
+```python
+# SDK call:
+await session.clr.invoke("MissionPlanner.NavController", "SetWaypoint", [lat, lon, alt])
+
+# Translates to:
+POST /substrate/v1/action
+{
+    "app_id": "mission-planner-12847",
+    "action": "__clr_invoke__",
+    "parameters": {
+        "type": "MissionPlanner.NavController",
+        "method": "SetWaypoint",
+        "args": [34.052, -118.243, 150.0],
+        "timeout_ms": 10000
+    }
+}
+
+# Daemon routes to:
+ClrSession::invoke("MissionPlanner.NavController", "SetWaypoint", [...])
+  │
+  └─ MMF command → managed bridge → MethodInfo.Invoke() → response
+```
+
+Similarly, `__clr_heap_walk__` is the internal action for heap snapshots.
+
+---
+
+## Error Handling
+
+| Error Code | Description | Recovery |
+|-----------|-------------|----------|
+| `clr_not_attached` | Bridge not injected yet | Wait for probe to complete (5–30s) |
+| `clr_type_not_found` | `type_name` doesn't exist in target | Verify exact fully-qualified type name |
+| `clr_method_not_found` | Method name or signature mismatch | Check method name and arg types |
+| `clr_invoke_timeout` | Method didn't return within timeout_ms | Increase `timeout_ms`, check for deadlocks |
+| `clr_mmf_error` | Memory-mapped file channel broken | Session will re-attach automatically |
+
+---
+
+## Supported Applications
+
+| Application | .NET Version | Notes |
+|-------------|-------------|-------|
+| **Mission Planner** | .NET 4.8 | Full MAVLink state, waypoint control |
+| Visual Studio 2022 | .NET 4.8 | Project/solution state |
+| WinForms / WPF apps | .NET 4.x / 6+ | Any managed desktop app |
+| MSFS Addons | .NET | Flight simulator plugins |
+| Azure DevOps Server | ASP.NET | Web server process |
+| Microsoft Office (COM) | .NET interop | Via VSTO / Office Interop |

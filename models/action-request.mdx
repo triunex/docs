@@ -1,0 +1,90 @@
+---
+title: "ActionRequest"
+description: "The request body for POST /substrate/v1/action — how to specify a target, action name, parameters, and verification."
+---
+
+## Schema
+
+```typescript
+interface ActionRequest {
+  pid?: number;                    // Target process PID (either this or app_id)
+  app_id?: string;                 // Target app ID (either this or pid)
+  action: string;                  // Action name from SubstrateState.actions
+  parameters?: Record<string, any>; // Parameters matching the action schema
+  verify_expression?: string;       // JS expression evaluated post-action (max 2048 bytes)
+  verify_timeout_ms?: number;       // Verification polling timeout (100–30000ms, default: 5000)
+  fresh_state?: boolean;           // Capture fresh state before dispatch (default: false)
+}
+```
+
+---
+
+## Constraints
+
+| Field | Constraint |
+|-------|-----------|
+| `pid` / `app_id` | At least one must be provided |
+| `action` | Must match a key in `SubstrateState.actions` OR be a CDP builtin |
+| `verify_expression` | Required when action reversibility is `irreversible_write` |
+| `verify_expression` | Max 2048 bytes |
+| `verify_timeout_ms` | 100–30000ms |
+
+---
+
+## Examples
+
+```json
+// Minimal — reversible action, no verification needed
+{
+  "app_id": "gmail-chrome-12847",
+  "action": "archive",
+  "parameters": { "email_id": "msg_18821af3" }
+}
+
+// Full — irreversible with verification
+{
+  "pid": 12847,
+  "action": "send_reply",
+  "parameters": {
+    "thread_id": "thread_7af2b3",
+    "body": "Thank you for your message.",
+    "cc": ["manager@example.com"]
+  },
+  "verify_expression": "inbox.sent_count > 0",
+  "verify_timeout_ms": 8000,
+  "fresh_state": false
+}
+
+// CDP builtin — click at coordinates
+{
+  "app_id": "gmail-chrome-12847",
+  "action": "click",
+  "parameters": { "x": 847, "y": 392 }
+}
+```
+
+---
+
+## Python SDK
+
+```python
+# Via session.execute() (recommended — handles verify auto-detection)
+result = await session.execute(
+    "send_reply",
+    parameters={"thread_id": "...", "body": "..."},
+    verify=True,
+    verify_expression="inbox.sent_count > 0",
+)
+
+# Via client.execute_action() (low-level)
+from nelieo_nsp import ActionRequest
+
+request = ActionRequest(
+    app_id="gmail-chrome-12847",
+    action="send_reply",
+    parameters={"thread_id": "...", "body": "..."},
+    verify_expression="inbox.sent_count > 0",
+    verify_timeout_ms=8000,
+)
+result = await client.execute_action(request)
+```

@@ -1,0 +1,141 @@
+---
+title: "Verification"
+description: "The VerificationResult model — how post-action verification works and what the outcome contains."
+---
+
+## Overview
+
+Verification is the mechanism that gives agents certainty that an action succeeded. Instead of assuming success based on an HTTP 200, NSP probes the post-action state and evaluates a boolean expression against it.
+
+---
+
+## VerificationResult Schema
+
+```typescript
+interface VerificationResult {
+  passed: boolean;            // The expression evaluated to true within the timeout
+  expression: string;         // The expression that was evaluated
+  computed_value: any | null; // The actual evaluated result
+  explanation: string;        // Human-readable description of what happened
+  latency_ms: number;         // Total time spent polling (ms)
+  poll_cycles: number;        // How many probe cycles were run
+  changed_fields: FieldDiff[]; // Fields that changed between before and after
+}
+
+interface FieldDiff {
+  path: string;   // Dot-notation key
+  before: any;    // Value before the action
+  after: any;     // Value after the action
+}
+```
+
+---
+
+## Verification Process
+
+```
+Action dispatched
+  │
+  ▼ wait post_action_wait_ms (default: 200ms)
+  │ (lets UI animations and backend writes settle)
+  │
+  ▼ Poll state: cycle 1
+  │ Evaluate expression against objects map
+  │ → True? Return immediately with passed=true ✓
+  │ → False? Continue polling
+  │
+  ▼ Poll state: cycle 2 (500ms later)
+  ...
+  │
+  ▼ Poll state: cycle N (verify_timeout_ms reached)
+  │ → Still false? Return passed=false ✗ (HTTP 422)
+```
+
+---
+
+## Expression Evaluation
+
+Expressions are evaluated against the post-action `objects` map using a lightweight safe evaluator:
+
+```python
+# State after action:
+# { "inbox.unread_count": 46, "inbox.sent_count": 15, ... }
+
+# Expression: "inbox.sent_count > 14"
+# → resolved: 15 > 14 → True ✓
+
+# Expression: "inbox.emails[0].is_read == true"
+# → resolved: true == true → True ✓
+
+# Expression: "flight.mode == 'GUIDED'"
+# → resolved: "GUIDED" == "GUIDED" → True ✓
+```
+
+---
+
+## Examples
+
+```json
+// Successful verification
+{
+  "passed": true,
+  "expression": "inbox.sent_count > 0",
+  "computed_value": true,
+  "explanation": "Expression evaluated to true on poll cycle 2 (280ms)",
+  "latency_ms": 280,
+  "poll_cycles": 2,
+  "changed_fields": [
+    { "path": "inbox.sent_count", "before": 14, "after": 15 }
+  ]
+}
+
+// Failed verification
+{
+  "passed": false,
+  "expression": "inbox.sent_count > 14",
+  "computed_value": false,
+  "explanation": "inbox.sent_count remained 14 after 10 poll cycles (5000ms). Action may have failed silently.",
+  "latency_ms": 5000,
+  "poll_cycles": 10,
+  "changed_fields": []
+}
+```
+
+---
+
+## Python SDK
+
+```python
+result = await session.execute(
+    "send_reply",
+    parameters={...},
+    verify=True,
+    verify_expression="inbox.sent_count > 0",
+)
+
+vr: nsp.VerificationResult = result.verification
+
+print(vr.passed)          # True
+print(vr.latency_ms)      # 280
+print(vr.poll_cycles)     # 2
+print(vr.changed_fields)  # [FieldDiff(path='inbox.sent_count', before=14, after=15)]
+print(vr.explanation)     # "Expression evaluated to true on poll cycle 2 (280ms)"
+
+# Check individual field diffs
+for diff in vr.changed_fields:
+    print(f"{diff.path}: {diff.before} → {diff.after}")
+```
+
+---
+
+## Choosing `verify_timeout_ms`
+
+| Action Type | Recommended Timeout |
+|-------------|-------------------|
+| UI state change (tab switch, select) | 1000–2000ms |
+| Email send / message send | 5000–8000ms |
+| File save / export | 3000–10000ms |
+| Drone command (mode change) | 5000–15000ms |
+| Drone command (physical maneuver) | 15000–60000ms |
+| Database write | 3000–10000ms |
+| API call via UI | 5000–30000ms |

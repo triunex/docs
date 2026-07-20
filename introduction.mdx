@@ -1,0 +1,126 @@
+---
+title: "Introduction"
+description: "NSP (Nelieo State Protocol) — The universal runtime substrate for AI agents. Any software. Any agent. Zero developer cooperation required."
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.png"
+  alt="NSP Hero"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.png"
+  alt="NSP Hero"
+/>
+
+## What is NSP?
+
+Every AI agent today operates by looking at screenshots and guessing where to click.
+
+```
+Screenshot (2MB PNG)
+  → Vision model inference (8 seconds)
+  → "Click at pixel (847, 392)"
+  → Miss by 3 pixels
+  → Screenshot again
+  → Repeat forever
+```
+
+At 85% accuracy per action, a 50-step task has a **0.03% end-to-end success rate**. This is why agents fail — not because the AI is weak, but because the interface is broken.
+
+**NSP attaches directly to a running application's runtime and reads its live state as structured JSON.** Agents call typed functions directly. No screenshots. No pixel coordinates. No guessing.
+
+```bash
+GET /substrate/v1/state/12847
+```
+
+```json
+{
+  "app_name": "Gmail",
+  "runtime": "v8",
+  "confidence": 0.97,
+  "objects": {
+    "inbox.unread_count": 47,
+    "inbox.emails[0].subject": "Q3 Performance Report",
+    "inbox.emails[0].from": "alice@example.com",
+    "inbox.emails[0].is_read": false
+  },
+  "actions": {
+    "send_reply": {
+      "signature": "fn(thread_id: string, body: string) -> bool",
+      "reversibility": "irreversible_write"
+    },
+    "archive": {
+      "signature": "fn(email_id: string) -> bool",
+      "reversibility": "reversible_write"
+    }
+  }
+}
+```
+
+**Result:** >99% accuracy on JavaScript apps. 120 actions per minute. Continuous 24/7 operation.
+
+---
+
+## How It Works
+
+The NSP daemon (`axon-daemon`) runs on the host machine alongside your applications. It has four layers:
+
+<CardGroup cols={2}>
+  <Card title="Process Watcher" icon="eye">
+    Continuously scans all running OS processes, classifies their runtime (V8 / JVM / CLR / Native), and manages probe attachment lifecycle.
+  </Card>
+  <Card title="Runtime Probes" icon="cpu">
+    Language-specific probes that attach to live processes and extract semantic state — without source code, UI automation, or instrumentation.
+  </Card>
+  <Card title="Semantic Engine" icon="brain">
+    Converts raw runtime data (heap nodes, JVMTI fields, CLR metadata) into structured SSF JSON with human-readable keys.
+  </Card>
+  <Card title="Agent API" icon="bolt">
+    A hardened Axum REST+WebSocket server on `localhost:7842` that any AI agent can call to read state and execute actions.
+  </Card>
+</CardGroup>
+
+---
+
+## Runtime Coverage
+
+| Runtime | Applications | Semantic Method | Accuracy |
+|---------|-------------|-----------------|----------|
+| **JavaScript/V8** | Gmail, Slack, VS Code, Notion, GitHub, Salesforce, WhatsApp, Discord, Shopify | V8 Inspector Protocol (CDP) + ASO fast-path | >99% |
+| **Java/JVM** | SAP, Eclipse, IntelliJ, Jenkins, Elasticsearch, ArduPilot GCS | JVMTI + JNI reflection | >97% |
+| **.NET/CLR** | Excel, Word, PowerPoint, Visual Studio, Mission Planner, Azure tools | Agent-native MMF + CLR heap walk + JIT hooks | >97% |
+| **Native C++** | Bloomberg Terminal, Photoshop, AutoCAD, Chrome internals | ptrace + Visual-Memory Grounding | >75% |
+
+---
+
+## Performance
+
+| Metric | NSP | Vision-Based Agent |
+|--------|-----|--------------------|
+| State read latency | **~50ms** | 8,000–15,000ms |
+| Action accuracy (JS apps) | **>99%** | 66–82% |
+| 50-step task completion | **~95%** | ~0.03% |
+| Actions per minute | **~120** | ~4–7 |
+| State verification | **Always** | Never |
+| Works offline | **Yes** | Depends on model |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Up and running in 5 minutes. Install the daemon, launch Chrome, call your first state endpoint.
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/architecture">
+    Deep dive into how probes attach to processes and produce SSF-normalized state.
+  </Card>
+  <Card title="Python SDK" icon="python" href="/sdk/python/overview">
+    The official SDK. `pip install nelieo-nsp`. Full async support, typed models, WebSocket streaming.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference/overview">
+    Complete reference for every REST and WebSocket endpoint.
+  </Card>
+</CardGroup>

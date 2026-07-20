@@ -1,0 +1,109 @@
+---
+title: "Authentication"
+description: "How to generate API keys, authenticate requests, and configure the auth layer."
+---
+
+## Overview
+
+By default, the NSP daemon requires every API request to include a valid API key in the `X-Substrate-Key` header. This prevents other processes on the same machine from calling your daemon without authorization.
+
+<Warning>
+  The daemon will warn loudly on startup if `auth.require_key = false`. **Never** disable auth in production environments.
+</Warning>
+
+---
+
+## Generating an API Key
+
+```bash
+axon-daemon.exe keygen
+```
+
+**Output:**
+```
+✅ Generated new API key: sk_nsp_a1b2c3d4e5f6789...
+   Added to: C:\ProgramData\Nelieo\axon_keys.json
+   The daemon will accept this key immediately (no restart required).
+```
+
+You can also generate keys through the Nelieo platform dashboard at [platform.nelieo.com/keys](https://platform.nelieo.com/keys).
+
+---
+
+## Using an API Key
+
+Add the key to every request via the `X-Substrate-Key` header:
+
+```bash
+curl -H "X-Substrate-Key: sk_nsp_a1b2c3d4e5f6..." \
+     http://localhost:7842/substrate/v1/apps
+```
+
+### Python SDK
+
+```python
+import nelieo_nsp as nsp
+
+# Pass the key directly
+async with nsp.NSPClient(api_key="sk_nsp_a1b2c3d4...") as client:
+    apps = await client.list_apps()
+
+# Or set the NSP_API_KEY environment variable and omit the argument
+# export NSP_API_KEY=sk_nsp_a1b2c3d4...
+async with nsp.NSPClient() as client:
+    apps = await client.list_apps()
+```
+
+---
+
+## Keys File Format
+
+API keys are stored in a JSON file:
+
+```json
+{
+  "keys": [
+    {
+      "id": "key_01j5abc123",
+      "key_hash": "blake3:a3f8c9d2...",
+      "label": "my-agent-prod",
+      "created_at": "2026-07-20T13:00:00Z",
+      "last_used_at": "2026-07-20T18:30:00Z",
+      "enabled": true
+    }
+  ]
+}
+```
+
+Keys are stored as **BLAKE3 hashes** — the plaintext key is never written to disk. Only the hash is verified at runtime.
+
+---
+
+## Authentication Errors
+
+| Status | Error Code | Description |
+|--------|-----------|-------------|
+| `401` | `missing_key` | No `X-Substrate-Key` header present |
+| `401` | `invalid_key` | Key provided but not found in key store |
+| `401` | `disabled_key` | Key exists but `enabled: false` |
+
+---
+
+## Disabling Auth (Dev Only)
+
+```toml
+# axon.toml — DEVELOPMENT ONLY
+[auth]
+require_key = false
+```
+
+```bash
+# Or via environment variable
+AXON_AUTH__REQUIRE_KEY=false axon-daemon.exe run
+```
+
+The daemon will print this warning every 60 seconds when auth is disabled:
+
+```
+⚠️  NSP DAEMON RUNNING WITHOUT AUTHENTICATION
+```

@@ -1,0 +1,221 @@
+---
+title: "SDK: CLR Helpers"
+description: "CLRSessionProxy — the .NET-specific helpers on NSPSession for reading fields, invoking methods, and walking the CLR heap."
+---
+
+## Overview
+
+`session.clr` is a `CLRSessionProxy` — available on any `NSPSession` attached to a `.NET CLR` application. It provides direct access to the managed runtime: read fields, invoke methods, and walk the heap without writing any .NET code.
+
+---
+
+## Prerequisites
+
+The application must be classified as `runtime: "clr"`. Check `session.state.runtime == RuntimeKind.CLR` before using CLR helpers.
+
+---
+
+## `read_field(type_name, field_name, *, timeout_ms)`
+
+Read the value of a single .NET field.
+
+```python
+# Signature
+async def read_field(
+    self,
+    type_name: str,     # Fully-qualified .NET type name
+    field_name: str,    # Field name (case-sensitive)
+    *,
+    timeout_ms: int = 10_000,
+) -> Any
+```
+
+```python
+# Mission Planner examples
+armed = await session.clr.read_field("MAVLink.MAVLinkInterface", "IsArmed")
+alt = await session.clr.read_field("MissionPlanner.FlightData", "alt")
+mode = await session.clr.read_field("MissionPlanner.FlightData", "mode")
+
+# Check type
+print(type(armed))  # <class 'bool'>
+print(type(alt))    # <class 'float'>
+print(type(mode))   # <class 'str'>
+```
+
+---
+
+## `read_fields(type_name, *field_names, timeout_ms)`
+
+Read multiple fields from the same type in a single roundtrip.
+
+```python
+async def read_fields(
+    self,
+    type_name: str,
+    *field_names: str,
+    timeout_ms: int = 10_000,
+) -> dict[str, Any]
+```
+
+```python
+telemetry = await session.clr.read_fields(
+    "MissionPlanner.FlightData",
+    "alt", "groundspeed", "airspeed", "heading",
+    "battery_voltage", "battery_remaining",
+    "gps_hdop", "gps_fix_type",
+)
+
+print(f"Altitude: {telemetry['alt']:.1f}m")
+print(f"Groundspeed: {telemetry['groundspeed']:.1f}m/s")
+print(f"Battery: {telemetry['battery_voltage']:.1f}V ({telemetry['battery_remaining']}%)")
+```
+
+---
+
+## `invoke(type_name, method_name, args, *, timeout_ms)`
+
+Invoke a .NET method on the target process and return its value.
+
+```python
+async def invoke(
+    self,
+    type_name: str,           # Fully-qualified type name
+    method_name: str,         # Method name
+    args: list[Any] = None,   # Method arguments (auto-coerced to .NET types)
+    *,
+    timeout_ms: int = 10_000,
+) -> Any
+```
+
+```python
+# Parameterless method
+status = await session.clr.invoke("MissionPlanner.MainV2", "GetStatusText")
+print(status)  # "OK: 3D GPS Fix. Satellites: 14"
+
+# String argument
+await session.clr.invoke("MissionPlanner.GCS", "setMode", ["GUIDED"])
+
+# Multiple typed args
+await session.clr.invoke(
+    "MissionPlanner.NavController",
+    "SetWaypoint",
+    [34.0522, -118.2437, 50.0],  # double, double, double
+)
+
+# Bool argument
+await session.clr.invoke("MissionPlanner.MainV2", "doArm", [True])
+
+# Returns a value
+count = await session.clr.invoke("MissionPlanner.WaypointManager", "GetWaypointCount")
+print(f"Waypoints: {count}")  # 7
+```
+
+---
+
+## `heap_snapshot(*, include_prefix, max_instances, timeout_ms)`
+
+Walk the CLR heap and return instances of matching types.
+
+```python
+async def heap_snapshot(
+    self,
+    *,
+    include_prefix: str = "",         # Filter types by prefix
+    max_instances: int = 64,          # Max objects to return
+    timeout_ms: int = 30_000,         # Timeout for full heap walk
+) -> list[dict[str, Any]]
+```
+
+Each returned object has:
+- `type_name: str` — fully-qualified type name
+- `fields: dict[str, Any]` — field name → value map
+
+```python
+# Get all MAVLink objects
+objects = await session.clr.heap_snapshot(
+    include_prefix="MAVLink",
+    max_instances=32,
+)
+
+for obj in objects:
+    if "Interface" in obj["type_name"]:
+        print(obj["type_name"])
+        for field, value in obj["fields"].items():
+            print(f"  {field} = {value}")
+```
+
+<Warning>
+  Heap snapshots pause the GC and take 5–30 seconds depending on heap size. Use `read_field()` and `read_fields()` for real-time monitoring. Reserve `heap_snapshot()` for discovery and debugging.
+</Warning>
+
+---
+
+## Type Coercion Reference
+
+When calling `invoke()`, Python values are automatically coerced to the correct .NET types based on the target method's parameter signature:
+
+| Python Type | .NET Target |
+|------------|-------------|
+| `True` / `False` | `bool` |
+| `int` | `int`, `long`, `short`, `byte`, `uint`, ... |
+| `float` | `double`, `float`, `decimal` |
+| `str` | `string` |
+| `str` (ISO 8601) | `DateTime` |
+| `str` (GUID) | `Guid` |
+| `list` | `T[]`, `List<T>` |
+| `dict` | `Dictionary<string, object>` |
+| `None` | `null` |
+| `str` (enum name) | Any `enum` type |
+
+---
+
+## Error Reference
+
+| Exception | Code | Description |
+|-----------|------|-------------|
+| `NSPActionError` | `clr_not_attached` | CLR bridge not injected yet — probe still attaching |
+| `NSPActionError` | `clr_type_not_found` | `type_name` not found in target assembly |
+| `NSPActionError` | `clr_method_not_found` | Method name or signature doesn't match |
+| `NSPActionError` | `clr_invoke_timeout` | Method didn't return within `timeout_ms` |
+| `NSPActionError` | `clr_mmf_error` | Memory-mapped file channel error — session reconnecting |
+
+---
+
+## Full Example: Mission Planner Monitor
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def mission_planner_monitor():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        session = await client.wait_for_app("Mission Planner", timeout=30.0)
+        
+        print(f"Connected to Mission Planner ({session.runtime})")
+        
+        # Read telemetry
+        while True:
+            try:
+                telem = await session.clr.read_fields(
+                    "MissionPlanner.FlightData",
+                    "alt", "groundspeed", "heading",
+                    "battery_voltage", "battery_remaining",
+                )
+                armed = await session.clr.read_field(
+                    "MAVLink.MAVLinkInterface", "IsArmed"
+                )
+                
+                print(
+                    f"Alt={telem['alt']:.1f}m  "
+                    f"GS={telem['groundspeed']:.1f}m/s  "
+                    f"Hdg={telem['heading']:.0f}°  "
+                    f"Batt={telem['battery_remaining']}%  "
+                    f"Armed={'✓' if armed else '✗'}"
+                )
+            except nsp.NSPActionError as e:
+                print(f"Telemetry error: {e.code}")
+            
+            await asyncio.sleep(1.0)
+
+asyncio.run(mission_planner_monitor())
+```

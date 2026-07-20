@@ -1,0 +1,141 @@
+---
+title: "SDK: JVM Helpers"
+description: "JVMSessionProxy — the Java-specific helpers on NSPSession for reading fields, invoking methods, and enumerating Java types."
+---
+
+## Overview
+
+`session.jvm` is a `JVMSessionProxy` — available on any `NSPSession` attached to a Java application. It provides direct access to the JVM: read fields, invoke methods, and enumerate loaded classes — all without modifying the target application.
+
+---
+
+## Prerequisites
+
+The application must be classified as `runtime: "jvm"`. Check `session.state.runtime == RuntimeKind.JVM` before using JVM helpers.
+
+---
+
+## `read_field(class_name, field_name, *, timeout_ms)`
+
+Read the value of a static or instance field from a loaded Java class.
+
+```python
+async def read_field(
+    self,
+    class_name: str,    # Fully-qualified Java class name (e.g., "com.ardupilot.GCS")
+    field_name: str,    # Field name (case-sensitive)
+    *,
+    timeout_ms: int = 10_000,
+) -> Any
+```
+
+```python
+# ArduPilot GCS examples
+alt = await session.jvm.read_field("com.ardupilot.GCS", "altitude")
+mode = await session.jvm.read_field("com.ardupilot.GCS", "flightMode")
+armed = await session.jvm.read_field("com.ardupilot.GCS", "isArmed")
+
+print(f"Alt: {alt:.1f}m  Mode: {mode}  Armed: {armed}")
+```
+
+---
+
+## `invoke(class_name, method_name, args, *, timeout_ms)`
+
+Invoke a Java method and return its result.
+
+```python
+async def invoke(
+    self,
+    class_name: str,
+    method_name: str,
+    args: list[Any] = None,  # Auto-coerced to JVM types
+    *,
+    timeout_ms: int = 10_000,
+) -> Any
+```
+
+```python
+# Parameterless
+status = await session.jvm.invoke("com.ardupilot.GCS", "getStatusText")
+
+# String arg
+await session.jvm.invoke("com.ardupilot.GCS", "setMode", ["GUIDED"])
+
+# Numeric args
+await session.jvm.invoke(
+    "com.ardupilot.WaypointManager",
+    "addWaypoint",
+    [34.052, -118.243, 150.0],  # double, double, double
+)
+```
+
+---
+
+## `list_classes(*, prefix, timeout_ms)`
+
+Enumerate classes loaded in the JVM matching a prefix.
+
+```python
+classes = await session.jvm.list_classes(prefix="com.ardupilot")
+for cls in classes:
+    print(cls)
+# com.ardupilot.GCS
+# com.ardupilot.WaypointManager
+# com.ardupilot.MAVLinkConnection
+```
+
+---
+
+## Type Coercion
+
+| Python Type | JVM Type |
+|------------|----------|
+| `bool` | `boolean` / `Boolean` |
+| `int` | `int`, `long`, `short`, `byte` |
+| `float` | `double`, `float` |
+| `str` | `String` |
+| `list` | `List<T>`, `T[]` |
+| `dict` | `Map<String, Object>` |
+| `None` | `null` |
+
+---
+
+## Error Reference
+
+| Exception | Code | Description |
+|-----------|------|-------------|
+| `NSPActionError` | `jvm_not_attached` | JVMTI agent not loaded — probe still attaching |
+| `NSPActionError` | `jvm_class_not_found` | Class not loaded in target JVM |
+| `NSPActionError` | `jvm_method_not_found` | Method name or signature doesn't match |
+| `NSPActionError` | `jvm_invoke_timeout` | Method didn't return within `timeout_ms` |
+| `NSPActionError` | `jvm_type_error` | Cannot coerce argument to target JVM type |
+
+---
+
+## Full Example
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def ardupilot_monitor():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        session = await client.wait_for_app("ArduPilot GCS", timeout=30.0)
+        print(f"Connected. Runtime: {session.runtime}")
+        
+        # List available classes
+        classes = await session.jvm.list_classes(prefix="com.ardupilot")
+        print(f"Found {len(classes)} ArduPilot classes")
+        
+        # Real-time telemetry
+        while True:
+            alt = await session.jvm.read_field("com.ardupilot.GCS", "altitude")
+            mode = await session.jvm.read_field("com.ardupilot.GCS", "flightMode")
+            status = await session.jvm.invoke("com.ardupilot.GCS", "getStatusText")
+            
+            print(f"Alt={alt:.1f}m  Mode={mode}  Status: {status}")
+            await asyncio.sleep(1.0)
+
+asyncio.run(ardupilot_monitor())
+```

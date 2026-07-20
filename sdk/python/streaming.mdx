@@ -1,0 +1,216 @@
+---
+title: "Real-Time Streaming"
+description: "Subscribe to live state change events over WebSocket using StateStream."
+---
+
+## Overview
+
+The NSP daemon broadcasts a `StateChangeNotification` over WebSocket every time a tracked process state changes. The Python SDK provides `StateStream` — an async iterator that delivers these events in real-time.
+
+**Use streaming when:**
+- You need sub-second reaction to state changes (latency goal < 100ms)
+- You're building a monitoring loop
+- You need to trigger actions immediately when a condition changes
+
+**Use polling (`refresh()`) when:**
+- You only need periodic state reads (e.g. every 5s)
+- You're running a one-shot agent task
+
+---
+
+## StateStream
+
+`StateStream` is an async iterator that yields `StateChangeNotification` objects.
+
+### Via Session (Recommended)
+
+```python
+async with session.watch() as stream:
+    async for event in stream:
+        # event is a StateChangeNotification
+        print(event.changed_keys)    # ['inbox.unread_count', 'inbox.emails[0]']
+        print(event.sequence)        # Monotonic sequence number
+        print(event.captured_at)     # datetime
+        print(event.pid)             # 12847
+        print(event.app_id)          # 'gmail-chrome-12847'
+```
+
+### Via Client (Raw Stream)
+
+```python
+async with client.watch(pid=12847) as stream:
+    async for event in stream:
+        print(event.changed_keys)
+```
+
+---
+
+## StateChangeNotification
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `pid` | `int` | OS process ID |
+| `app_id` | `str` | Stable app identifier |
+| `sequence` | `int` | Monotonic counter — gaps indicate dropped events |
+| `changed_keys` | `list[str]` | State keys that changed since last notification |
+| `captured_at` | `datetime` | Timestamp of the state capture |
+
+---
+
+## Auto-Refresh on Events
+
+The most ergonomic pattern — the session state is automatically refreshed on every event:
+
+```python
+async with session.watch(auto_refresh_on_event=True) as stream:
+    async for event in stream:
+        # session.state is always fresh here — no need to call refresh()
+        unread = session.get_int("inbox.unread_count")
+        print(f"[{event.captured_at}] Unread: {unread}")
+        
+        if "inbox.emails[0]" in event.changed_keys:
+            subject = session.get_str("inbox.emails[0].subject")
+            print(f"New email: {subject}")
+```
+
+---
+
+## Filtering Events
+
+```python
+async with session.watch() as stream:
+    async for event in stream:
+        # Only process if inbox changed
+        if not any(k.startswith("inbox.") for k in event.changed_keys):
+            continue
+        
+        await session.refresh()
+        
+        # Now process
+        unread = session.get_int("inbox.unread_count")
+        if unread > 0:
+            await handle_new_emails(session)
+```
+
+---
+
+## Timeout and Cancellation
+
+```python
+import asyncio
+
+async def watch_with_timeout():
+    try:
+        async with asyncio.timeout(60.0):  # Python 3.11+
+            async with session.watch() as stream:
+                async for event in stream:
+                    print(event.changed_keys)
+    except asyncio.TimeoutError:
+        print("Watching stopped after 60 seconds")
+```
+
+```python
+# Or with a task and cancellation
+async def watch_task():
+    async with session.watch() as stream:
+        async for event in stream:
+            print(event.changed_keys)
+
+task = asyncio.create_task(watch_task())
+await asyncio.sleep(60.0)
+task.cancel()
+try:
+    await task
+except asyncio.CancelledError:
+    pass
+```
+
+---
+
+## Watching Multiple Apps Simultaneously
+
+```python
+import asyncio
+
+async def watch_all():
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        apps = await client.list_apps()
+        sessions = [await client.session(app.pid) for app in apps]
+        
+        async def watch_one(session):
+            async with session.watch() as stream:
+                async for event in stream:
+                    print(f"[{session.app_name}] {event.changed_keys}")
+        
+        # Watch all apps concurrently
+        await asyncio.gather(*[watch_one(s) for s in sessions])
+
+asyncio.run(watch_all())
+```
+
+---
+
+## Auto-Reconnect
+
+By default, `StateStream` reconnects automatically if the WebSocket connection drops:
+
+```python
+async with session.watch(auto_reconnect=True) as stream:
+    async for event in stream:
+        ...
+# If the connection drops, the stream will reconnect transparently.
+# Sequence gaps in `event.sequence` indicate a reconnection occurred.
+```
+
+To detect reconnections:
+
+```python
+last_seq = 0
+async with session.watch() as stream:
+    async for event in stream:
+        if event.sequence > last_seq + 1:
+            print(f"⚠️  Sequence gap: {last_seq} → {event.sequence}, reconnected")
+        last_seq = event.sequence
+```
+
+---
+
+## Queue Behavior
+
+Events are buffered in an internal queue. If your consumer is slower than the daemon's emit rate:
+
+```python
+# Increase buffer (default: 128)
+async with session.watch(max_queue=1024) as stream:
+    ...
+```
+
+When the queue is full, the **oldest** event is dropped. The sequence number gap tells you how many events were dropped.
+
+---
+
+## WebSocket Endpoint
+
+The underlying WebSocket endpoint is:
+
+```
+ws://localhost:7842/substrate/v1/watch/{pid}
+```
+
+Authentication is via a URL query parameter:
+
+```
+ws://localhost:7842/substrate/v1/watch/12847?key=sk_nsp_...
+```
+
+Message format (JSON):
+
+```json
+{
+  "pid": 12847,
+  "app_id": "gmail-chrome-12847",
+  "sequence": 142,
+  "changed_keys": ["inbox.unread_count", "inbox.emails[0].is_read"],
+  "captured_at": "2026-07-20T13:00:00.123Z"
+}
+```

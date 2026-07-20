@@ -1,0 +1,271 @@
+---
+title: "Core Concepts"
+description: "The foundational primitives of NSP — SubstrateState, SSF, actions, reversibility, and probes."
+---
+
+## The Substrate Model
+
+NSP treats every running application as a **substrate** — a live, addressable data source that can be read and written to in real-time. The substrate model has three components:
+
+<CardGroup cols={3}>
+  <Card title="State" icon="database">
+    A typed JSON snapshot of the application's current data, normalized to the Substrate Schema Format (SSF).
+  </Card>
+  <Card title="Actions" icon="bolt">
+    Typed function signatures discovered from the runtime that agents can invoke directly — no UI interaction.
+  </Card>
+  <Card title="Schema" icon="diagram-project">
+    A persistent, versioned registry of discovered state structures and action mappings, stored in SQLite.
+  </Card>
+</CardGroup>
+
+---
+
+## SubstrateState (SSF)
+
+Every application's state is represented as a `SubstrateState` object. This is the core data structure that flows through every part of NSP.
+
+```json
+{
+  "capture_id": "0196f4a2-3b5c-7d00-8e1f-9a0b2c3d4e5f",
+  "app_id": "gmail-chrome-12847",
+  "app_name": "Gmail",
+  "pid": 12847,
+  "runtime": "v8",
+  "schema_version": "1.4.2",
+  "captured_at": "2026-07-20T13:00:00Z",
+  "confidence": 0.97,
+  "context": {
+    "url": "https://mail.google.com/mail/u/0/#inbox",
+    "view": "gmail_inbox",
+    "window_title": "Inbox - Gmail"
+  },
+  "objects": {
+    "inbox.unread_count": 47,
+    "inbox.total_count": 1284,
+    "inbox.emails[0].id": "msg_18821af3",
+    "inbox.emails[0].from": "alice@example.com",
+    "inbox.emails[0].subject": "Q3 Performance Report",
+    "inbox.emails[0].is_read": false,
+    "inbox.emails[0].has_attachments": true
+  },
+  "actions": { ... },
+  "probe_metadata": {
+    "capture_latency_ms": 28,
+    "total_latency_ms": 51,
+    "cache_hit": false,
+    "dom_tier_used": true
+  }
+}
+```
+
+### Key Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `capture_id` | UUIDv7 | Time-ordered unique ID for this capture |
+| `app_id` | string | Stable identifier — survives process restarts |
+| `app_name` | string | Human-readable name e.g. `"Gmail"` |
+| `pid` | integer | OS process ID at time of capture |
+| `runtime` | enum | `v8` / `jvm` / `clr` / `native` / `unknown` |
+| `confidence` | float | Probe quality score 0.0–1.0 |
+| `objects` | object | Dot-notation key-value state map |
+| `actions` | object | Available action schemas |
+| `probe_metadata` | object | Internal telemetry |
+
+---
+
+## Confidence Score
+
+Every `SubstrateState` has a `confidence` field (0.0–1.0) representing how certain the probe is in its semantic labels.
+
+| Range | Meaning | Action Gating |
+|-------|---------|---------------|
+| `0.0 – 0.39` | Unknown / probe initializing | No actions allowed |
+| `0.40 – 0.79` | Partial — some objects labeled | Read-only actions |
+| `0.80 – 0.94` | Good — most objects labeled | `reversible_write` actions allowed |
+| `0.95 – 1.00` | Excellent — full semantic coverage | All actions including `irreversible_write` |
+
+**Runtime confidence baselines:**
+
+| Runtime | Expected Confidence |
+|---------|-------------------|
+| V8 / JavaScript | `0.95 – 0.99` |
+| JVM / Java | `0.93 – 0.97` |
+| CLR / .NET | `0.93 – 0.97` |
+| Native | `0.40 – 0.75` |
+
+---
+
+## Action Schema
+
+Every action available on a substrate is described by an `ActionSchema`:
+
+```json
+{
+  "send_reply": {
+    "signature": "fn(thread_id: string, body: string, cc?: string[]) -> bool",
+    "reversibility": "irreversible_write",
+    "description": "Send a reply to an email thread",
+    "confidence": 0.99,
+    "parameters": [
+      {
+        "name": "thread_id",
+        "type_name": "string",
+        "required": true,
+        "description": "Thread ID from inbox.emails[N].thread_id"
+      },
+      {
+        "name": "body",
+        "type_name": "string",
+        "required": true,
+        "description": "Reply body text"
+      },
+      {
+        "name": "cc",
+        "type_name": "array",
+        "required": false,
+        "description": "Optional CC email addresses"
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Reversibility
+
+Every action is classified into one of three reversibility tiers. **This is a safety contract, not a suggestion.**
+
+<AccordionGroup>
+  <Accordion title="read — No state change">
+    The action reads data without modifying anything. No confidence gate. Safe to call at any time.
+    
+    **Examples:** `get_thread`, `search`, `list_contacts`, `read_document`
+  </Accordion>
+  
+  <Accordion title="reversible_write — Undoable change">
+    The action changes application state, but the change can be undone.
+    
+    **Requires:** `confidence >= 0.80`
+    
+    **Examples:** `archive`, `label`, `move_to_folder`, `mark_read`, `star`, `create_draft`
+  </Accordion>
+  
+  <Accordion title="irreversible_write — Permanent change">
+    The action causes a permanent side effect that cannot be undone.
+    
+    **Requires:** `confidence >= 0.95` AND `verify=True` with a `verify_expression`
+    
+    **Examples:** `send_reply`, `delete_permanently`, `purchase`, `submit_form`, `send_message`
+    
+    The SDK automatically enforces `verify=True` for these actions:
+    ```python
+    # This raises NSPIrreversibleNotConfirmedError
+    await session.execute("send_reply", parameters={...}, verify=False)
+    
+    # Correct — verify=True is required
+    await session.execute(
+        "send_reply",
+        parameters={...},
+        verify=True,
+        verify_expression="inbox.sent_count > 0",
+    )
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Runtime Probes
+
+Each runtime uses a different technical approach to read application state:
+
+### V8 / JavaScript
+
+The V8 probe uses the **Chrome DevTools Protocol (CDP)** to connect to any running Chrome or Electron process via its remote debugging port.
+
+**Two-tier extraction:**
+
+1. **ASO Fast-Path** (primary) — Injects a JavaScript snippet (`__axon_aso_snapshot`) that reads the application's data model from the V8 heap directly. Returns in **5–50ms**.
+
+2. **Heap Snapshot Fallback** — When ASO fails, takes a full V8 heap snapshot (~47s), parses the flat-array node/edge format, filters internals, and normalizes to SSF.
+
+**Applies to:** Gmail, Slack, VS Code, Notion, GitHub Desktop, Salesforce, WhatsApp Desktop, Discord, Shopify, HubSpot, any Electron app.
+
+### JVM / Java
+
+The JVM probe uses the **JVMTI (JVM Tool Interface)** to attach to a running Java process. It:
+
+1. Loads a native JVMTI agent (via `AttachAPI`)
+2. Uses JNI reflection to enumerate classes and read field values
+3. Converts Java objects to SSF JSON using type metadata from class files
+
+**Applies to:** SAP ERP, Eclipse, IntelliJ IDEA, Jenkins, Elasticsearch, ArduPilot GCS (Java).
+
+### CLR / .NET
+
+The CLR probe uses a **Memory-Mapped File (MMF)** bridge to communicate with a managed C# bootstrapper injected into the target process. It:
+
+1. Injects the CLR bootstrapper DLL using the Windows CLR Hosting API
+2. The managed bridge walks the CLR heap using `ICorProfiler`-style reflection
+3. Reads field values and method return values across the MMF channel
+
+**Applies to:** Mission Planner, WinForms apps, WPF apps, Visual Studio, Microsoft Office, .NET 4.x and .NET 6+ apps.
+
+### Native / C++
+
+The native probe uses **ptrace** (Linux) or **ReadProcessMemory** (Windows) to read process memory, combined with **Visual-Memory Grounding** to semantically label raw addresses.
+
+**Applies to:** Bloomberg Terminal, Photoshop, AutoCAD, Chrome internals (C++ layer).
+
+---
+
+## App Lifecycle
+
+Understanding the lifecycle of an app tracked by NSP:
+
+```
+App Starts
+   │
+   ▼
+ProcessScanner detects process (PID, exe name, cmdline)
+   │
+   ▼
+RuntimeDetector classifies: V8 / JVM / CLR / Native
+   │
+   ▼
+SignatureRegistry matches known app → assigns app_id + app_name
+   │
+   ▼
+ProbeLifecycle attaches probe (cold probe: 3–90s first time)
+   │
+   ▼
+First SubstrateState cached (confidence 0.80+)
+   │
+   ▼
+Fast poll loop (default 2s interval) — ASO fast-path (~50ms)
+   │
+   ▼
+StateChangeNotification broadcast to WebSocket subscribers
+   │
+   ▼
+App exits → probe detached → state removed from cache
+```
+
+---
+
+## State Object Keys
+
+NSP uses **dot-notation flat keys** for all state objects. This design was chosen so agents can reference specific values precisely without navigating nested JSON:
+
+```python
+# Instead of: state["inbox"]["emails"][0]["subject"]
+session.get_str("inbox.emails[0].subject")
+
+# Prefix query — get everything in inbox
+inbox = session.state.keys_with_prefix("inbox.")
+```
+
+Keys are **stable across poll cycles** — the same key will always refer to the same semantic concept for a given app+schema version.

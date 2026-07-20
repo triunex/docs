@@ -1,0 +1,158 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "NSP — Nelieo State Protocol",
+  "logo": {
+    "dark": "/logo/nelieo-dark.svg",
+    "light": "/logo/nelieo-light.svg"
+  },
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#0F172A",
+    "light": "#38BDF8",
+    "dark": "#0F172A",
+    "anchors": {
+      "from": "#0F172A",
+      "to": "#38BDF8"
+    }
+  },
+  "topbarLinks": [
+    {
+      "name": "Platform",
+      "url": "https://platform.nelieo.com"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "Get API Key",
+    "url": "https://platform.nelieo.com/keys"
+  },
+  "tabs": [
+    {
+      "name": "API Reference",
+      "url": "api-reference"
+    },
+    {
+      "name": "SDK Reference",
+      "url": "sdk-reference"
+    }
+  ],
+  "anchors": [
+    {
+      "name": "GitHub",
+      "icon": "github",
+      "url": "https://github.com/triunex/axon"
+    },
+    {
+      "name": "Community",
+      "icon": "discord",
+      "url": "https://discord.gg/nelieo"
+    },
+    {
+      "name": "Status",
+      "icon": "signal",
+      "url": "https://status.nelieo.com"
+    }
+  ],
+  "navigation": [
+    {
+      "group": "Getting Started",
+      "pages": [
+        "introduction",
+        "quickstart",
+        "concepts",
+        "architecture"
+      ]
+    },
+    {
+      "group": "The Daemon",
+      "pages": [
+        "daemon/overview",
+        "daemon/installation",
+        "daemon/configuration",
+        "daemon/authentication",
+        "daemon/windows-service"
+      ]
+    },
+    {
+      "group": "Runtime Probes",
+      "pages": [
+        "probes/overview",
+        "probes/v8",
+        "probes/jvm",
+        "probes/clr",
+        "probes/native"
+      ]
+    },
+    {
+      "group": "Python SDK",
+      "pages": [
+        "sdk/python/overview",
+        "sdk/python/installation",
+        "sdk/python/client",
+        "sdk/python/session",
+        "sdk/python/clr",
+        "sdk/python/jvm",
+        "sdk/python/streaming",
+        "sdk/python/error-handling"
+      ]
+    },
+    {
+      "group": "API Reference",
+      "pages": [
+        "api-reference/overview",
+        "api-reference/health",
+        "api-reference/apps",
+        "api-reference/state",
+        "api-reference/action",
+        "api-reference/schema",
+        "api-reference/watch",
+        "api-reference/diff",
+        "api-reference/verify",
+        "api-reference/learn"
+      ]
+    },
+    {
+      "group": "Data Models",
+      "pages": [
+        "models/substrate-state",
+        "models/action-schema",
+        "models/action-request",
+        "models/action-response",
+        "models/app-summary",
+        "models/verification"
+      ]
+    },
+    {
+      "group": "Security",
+      "pages": [
+        "security/overview",
+        "security/api-keys",
+        "security/rate-limiting",
+        "security/action-safety"
+      ]
+    },
+    {
+      "group": "Guides",
+      "pages": [
+        "guides/gmail-agent",
+        "guides/dotnet-agent",
+        "guides/java-agent",
+        "guides/real-time-streaming",
+        "guides/chrome-setup",
+        "guides/production-checklist"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "x": "https://x.com/nelieo_ai",
+    "github": "https://github.com/triunex/axon",
+    "linkedin": "https://linkedin.com/company/nelieo"
+  },
+  "feedback": {
+    "thumbsRating": true,
+    "suggestEdit": true,
+    "raiseIssue": true
+  },
+  "modeToggle": {
+    "default": "dark"
+  }
+}

@@ -1,0 +1,164 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "NSP — Nelieo State Protocol",
+  "colors": {
+    "primary": "#38BDF8",
+    "light": "#7DD3FC",
+    "dark": "#0F172A"
+  },
+  "favicon": "/favicon.svg",
+  "logo": {
+    "dark": "/logo/nelieo-mark.png",
+    "light": "/logo/nelieo-mark.png"
+  },
+  "topbarLinks": [
+    {
+      "name": "Platform",
+      "url": "https://platform.nelieo.com"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "Get API Key",
+    "url": "https://platform.nelieo.com/keys"
+  },
+  "anchors": [
+    {
+      "name": "GitHub",
+      "icon": "github",
+      "url": "https://github.com/triunex/axon"
+    },
+    {
+      "name": "Community",
+      "icon": "discord",
+      "url": "https://discord.gg/nelieo"
+    },
+    {
+      "name": "Status",
+      "icon": "signal",
+      "url": "https://status.nelieo.com"
+    }
+  ],
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Docs",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "concepts",
+              "architecture"
+            ]
+          },
+          {
+            "group": "The Daemon",
+            "pages": [
+              "daemon/overview",
+              "daemon/installation",
+              "daemon/configuration",
+              "daemon/authentication",
+              "daemon/windows-service"
+            ]
+          },
+          {
+            "group": "Runtime Probes",
+            "pages": [
+              "probes/overview",
+              "probes/v8",
+              "probes/jvm",
+              "probes/clr",
+              "probes/native"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/overview",
+              "security/api-keys",
+              "security/rate-limiting",
+              "security/action-safety"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/gmail-agent",
+              "guides/dotnet-agent",
+              "guides/java-agent",
+              "guides/real-time-streaming",
+              "guides/chrome-setup",
+              "guides/production-checklist"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api-reference/overview",
+              "api-reference/health",
+              "api-reference/apps",
+              "api-reference/state",
+              "api-reference/action",
+              "api-reference/schema",
+              "api-reference/watch",
+              "api-reference/diff",
+              "api-reference/verify",
+              "api-reference/learn"
+            ]
+          },
+          {
+            "group": "Data Models",
+            "pages": [
+              "models/substrate-state",
+              "models/action-schema",
+              "models/action-request",
+              "models/action-response",
+              "models/app-summary",
+              "models/verification"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "SDK Reference",
+        "groups": [
+          {
+            "group": "Python SDK",
+            "pages": [
+              "sdk/python/overview",
+              "sdk/python/installation",
+              "sdk/python/client",
+              "sdk/python/session",
+              "sdk/python/clr",
+              "sdk/python/jvm",
+              "sdk/python/streaming",
+              "sdk/python/error-handling"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "x": "https://x.com/nelieo_ai",
+      "github": "https://github.com/triunex/axon",
+      "linkedin": "https://linkedin.com/company/nelieo"
+    }
+  },
+  "feedback": {
+    "thumbsRating": true,
+    "suggestEdit": true,
+    "raiseIssue": true
+  },
+  "modeToggle": {
+    "default": "dark"
+  }
+}

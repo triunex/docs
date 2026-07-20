@@ -1,0 +1,228 @@
+---
+title: "Guide: Gmail AI Agent"
+description: "Build a complete Gmail agent with NSP — read emails, send replies, archive, and stream real-time notifications."
+---
+
+## Overview
+
+This guide builds a production-ready Gmail agent that:
+1. Attaches to Gmail running in Chrome
+2. Reads the inbox with full email metadata
+3. Sends replies with post-send verification
+4. Archives emails after processing
+5. Streams real-time notifications for new emails
+
+**Prerequisites:**
+- NSP daemon running (`axon-daemon.exe run`)
+- Chrome launched with `--remote-debugging-port=9222`
+- Gmail open in a Chrome tab
+- `pip install nelieo-nsp`
+
+---
+
+## Step 1: Setup Chrome
+
+```cmd
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+```
+
+Open `mail.google.com` in any tab. The daemon detects Gmail automatically within ~5 seconds.
+
+---
+
+## Step 2: Verify Detection
+
+```bash
+curl -H "X-Substrate-Key: sk_nsp_..." http://localhost:7842/substrate/v1/apps
+```
+
+You should see Gmail listed with `confidence >= 0.95`.
+
+---
+
+## Step 3: The Agent
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+from loguru import logger
+
+API_KEY = "sk_nsp_your_key_here"
+
+class GmailAgent:
+    def __init__(self):
+        self.client = nsp.NSPClient(api_key=API_KEY)
+        self.session = None
+
+    async def connect(self):
+        """Connect to Gmail, waiting up to 30s if it's not ready yet."""
+        await self.client.__aenter__()
+        logger.info("Waiting for Gmail...")
+        self.session = await self.client.wait_for_app("Gmail", timeout=30.0)
+        logger.info(
+            "Connected to {} (conf={:.2f}, {} actions)",
+            self.session.app_name,
+            self.session.confidence,
+            len(self.session.actions),
+        )
+
+    async def disconnect(self):
+        await self.client.aclose()
+
+    # ── Reading State ────────────────────────────────────────────────────
+
+    async def get_inbox_summary(self) -> dict:
+        """Return a summary of the inbox."""
+        await self.session.refresh()
+        state = self.session.state
+
+        unread = state.get_int("inbox.unread_count")
+        total = state.get_int("inbox.total_count")
+
+        emails = []
+        for i in range(min(unread, 20)):
+            prefix = f"inbox.emails[{i}]"
+            if not state.get("prefix + '.id'"):
+                break
+            emails.append({
+                "id": state.get_str(f"{prefix}.id"),
+                "thread_id": state.get_str(f"{prefix}.thread_id"),
+                "from": state.get_str(f"{prefix}.from"),
+                "subject": state.get_str(f"{prefix}.subject"),
+                "snippet": state.get_str(f"{prefix}.snippet"),
+                "is_read": state.get_bool(f"{prefix}.is_read"),
+                "has_attachments": state.get_bool(f"{prefix}.has_attachments"),
+            })
+
+        return {
+            "unread_count": unread,
+            "total_count": total,
+            "emails": emails,
+        }
+
+    # ── Actions ──────────────────────────────────────────────────────────
+
+    async def send_reply(self, thread_id: str, body: str, cc: list[str] = None) -> bool:
+        """Send a reply to an email thread with verification."""
+        logger.info("Sending reply to thread: {}", thread_id)
+
+        before_sent = self.session.get_int("inbox.sent_count")
+
+        result = await self.session.execute(
+            "send_reply",
+            parameters={
+                "thread_id": thread_id,
+                "body": body,
+                **({"cc": cc} if cc else {}),
+            },
+            verify=True,
+            verify_expression=f"inbox.sent_count > {before_sent}",
+            verify_timeout_ms=8000,
+        )
+
+        if result.success:
+            logger.info("Reply sent in {}ms", result.latency_ms)
+        else:
+            logger.error("Reply failed: {}", result.error_message)
+
+        return result.success
+
+    async def archive(self, email_id: str) -> bool:
+        """Archive an email."""
+        result = await self.session.execute(
+            "archive",
+            parameters={"email_id": email_id},
+        )
+        return result.success
+
+    async def mark_read(self, email_id: str) -> bool:
+        """Mark an email as read."""
+        result = await self.session.execute(
+            "mark_read",
+            parameters={"email_id": email_id},
+        )
+        return result.success
+
+    # ── Streaming ────────────────────────────────────────────────────────
+
+    async def watch_inbox(self, handler):
+        """Stream inbox changes, calling handler(new_email) for each new email."""
+        last_unread = self.session.get_int("inbox.unread_count")
+        last_top_id = self.session.get_str("inbox.emails[0].id")
+
+        async with self.session.watch(auto_refresh_on_event=True) as stream:
+            async for event in stream:
+                if "inbox.unread_count" not in event.changed_keys:
+                    continue
+
+                new_unread = self.session.get_int("inbox.unread_count")
+                new_top_id = self.session.get_str("inbox.emails[0].id")
+
+                if new_top_id != last_top_id and new_unread > last_unread:
+                    # New email arrived at the top
+                    email = {
+                        "id": new_top_id,
+                        "from": self.session.get_str("inbox.emails[0].from"),
+                        "subject": self.session.get_str("inbox.emails[0].subject"),
+                    }
+                    logger.info("New email from: {}", email["from"])
+                    await handler(email)
+
+                last_unread = new_unread
+                last_top_id = new_top_id
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+async def main():
+    agent = GmailAgent()
+    await agent.connect()
+
+    # Read current inbox
+    inbox = await agent.get_inbox_summary()
+    print(f"\nInbox: {inbox['unread_count']} unread / {inbox['total_count']} total")
+    print(f"{'From':<30} {'Subject':<50} {'Read'}")
+    print("-" * 90)
+    for email in inbox["emails"]:
+        status = "✓" if email["is_read"] else "●"
+        print(f"{status} {email['from'][:28]:<30} {email['subject'][:48]:<50}")
+
+    # Watch for new emails
+    print("\nWatching for new emails (Ctrl+C to stop)...")
+
+    async def on_new_email(email):
+        print(f"\n📧 New email from {email['from']}: {email['subject']}")
+        # Auto-reply example
+        inbox = await agent.get_inbox_summary()
+        if inbox["emails"]:
+            thread_id = inbox["emails"][0]["thread_id"]
+            await agent.send_reply(
+                thread_id,
+                "Thank you for your message. I'll review this shortly."
+            )
+
+    await agent.watch_inbox(on_new_email)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+## Available Actions in Gmail
+
+After the first probe, Gmail typically exposes these actions:
+
+| Action | Reversibility | Parameters |
+|--------|--------------|------------|
+| `send_reply` | `irreversible_write` | `thread_id`, `body`, `cc?` |
+| `send_email` | `irreversible_write` | `to`, `subject`, `body`, `cc?` |
+| `archive` | `reversible_write` | `email_id` |
+| `mark_read` | `reversible_write` | `email_id` |
+| `mark_unread` | `reversible_write` | `email_id` |
+| `star` | `reversible_write` | `email_id` |
+| `delete` | `irreversible_write` | `email_id` |
+| `label` | `reversible_write` | `email_id`, `label` |
+| `search` | `read` | `query` |
+| `get_thread` | `read` | `thread_id` |

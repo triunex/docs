@@ -1,0 +1,60 @@
+---
+title: "GET /health"
+description: "Liveness probe — check whether the daemon is running and healthy."
+---
+
+## Endpoint
+
+```http
+GET /health
+```
+
+No authentication required. Safe to call from monitoring systems, load balancers, and CI health checks.
+
+---
+
+## Response
+
+```json
+{
+  "status": "ok",
+  "version": "1.0.0",
+  "uptime_secs": 3600,
+  "tracked_processes": 3,
+  "auth_enabled": true
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | `string` | Always `"ok"` when the daemon is healthy |
+| `version` | `string` | Daemon semver version |
+| `uptime_secs` | `integer` | Seconds since daemon start |
+| `tracked_processes` | `integer` | Number of currently tracked processes |
+| `auth_enabled` | `boolean` | Whether API key auth is required |
+
+---
+
+## Example
+
+```bash
+curl http://localhost:7842/health
+```
+
+```json
+{
+  "status": "ok",
+  "version": "1.0.0",
+  "uptime_secs": 7200,
+  "tracked_processes": 4,
+  "auth_enabled": true
+}
+```
+
+---
+
+## Python SDK
+
+```python
+is_up = await client.ping()  # Returns True / False (never raises)
+```

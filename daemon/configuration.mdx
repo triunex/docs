@@ -1,0 +1,249 @@
+---
+title: "Daemon Configuration"
+description: "Full reference for all axon.toml configuration keys and AXON_* environment variables."
+---
+
+## Config File Location
+
+The daemon loads configuration from multiple sources. The typical setup:
+
+```
+C:\ProgramData\Nelieo\axon.toml   ← system-wide (applies to all users)
+%APPDATA%\Nelieo\axon.toml        ← per-user overrides
+./axon.toml                        ← working-directory (dev only)
+AXON_* env vars                    ← highest priority, always wins
+```
+
+## Full Configuration Reference
+
+Here is a complete `axon.toml` with every option documented:
+
+```toml
+# ─────────────────────────────────────────────────────────
+# HTTP Server
+# ─────────────────────────────────────────────────────────
+[server]
+# IP to bind. Default: 127.0.0.1 (localhost only)
+# NEVER change to 0.0.0.0 unless behind a firewall.
+host = "127.0.0.1"
+
+# Port the NSP API listens on. Default: 7842
+port = 7842
+
+# Request timeout for standard routes (ms). Default: 30000
+# Action route has a separate 120s timeout hardcoded.
+request_timeout_ms = 30000
+
+# Maximum HTTP body size (bytes). Default: 10485760 (10MB)
+max_body_bytes = 10485760
+
+# ─────────────────────────────────────────────────────────
+# Authentication
+# ─────────────────────────────────────────────────────────
+[auth]
+# Enable API key authentication. Default: true
+# Set to false ONLY for local development.
+require_key = true
+
+# Path to the JSON file containing valid API keys.
+# Generate keys with: axon-daemon keygen
+keys_file = "C:\\ProgramData\\Nelieo\\axon_keys.json"
+
+# ─────────────────────────────────────────────────────────
+# Rate Limiting
+# ─────────────────────────────────────────────────────────
+[rate_limit]
+# Enable rate limiting. Default: true
+enabled = true
+
+# Max state read requests per second per API key. Default: 100
+state_per_second = 100
+
+# Max action executions per second per API key. Default: 10
+action_per_second = 10
+
+# Max heap snapshot requests per minute. Default: 2
+# Heap snapshots are expensive (up to 47s). Keep this low.
+snapshot_per_minute = 2
+
+# TTL for rate limit buckets (seconds). Default: 3600
+bucket_ttl_secs = 3600
+
+# ─────────────────────────────────────────────────────────
+# Process Watcher
+# ─────────────────────────────────────────────────────────
+[watcher]
+# How often to scan for new/removed processes (seconds). Default: 5
+scan_interval_secs = 5
+
+# How often to poll each tracked process for state updates (seconds).
+# Default: 2 — this is the latency of your state cache.
+poll_interval_secs = 2
+
+# Minimum confidence to consider a process worth tracking. Default: 0.4
+# Processes classified below this are ignored.
+min_confidence = 0.4
+
+# Whether to probe processes with unknown runtime classification. Default: false
+probe_unknown = false
+
+# Maximum number of processes to track simultaneously. Default: 256
+max_tracked_processes = 256
+
+# ─────────────────────────────────────────────────────────
+# Action Dispatcher
+# ─────────────────────────────────────────────────────────
+[dispatcher]
+# Milliseconds to wait after an action before reading post-action state.
+# Allows UI animations and backend writes to settle. Default: 200
+post_action_wait_ms = 200
+
+# Maximum size of a verify_expression string (bytes). Default: 2048
+verify_expression_max_bytes = 2048
+
+# CDP action timeout (ms) — how long to wait for a CDP command. Default: 30000
+cdp_action_timeout_ms = 30000
+
+# ─────────────────────────────────────────────────────────
+# Schema Registry
+# ─────────────────────────────────────────────────────────
+[registry]
+# Path to the SQLite schema database. Default: C:\ProgramData\Nelieo\axon_registry.db
+db_path = "C:\\ProgramData\\Nelieo\\axon_registry.db"
+
+# Use in-memory registry (no persistence). Default: false
+# Set true for testing/dev to start fresh every run.
+in_memory = false
+
+# ─────────────────────────────────────────────────────────
+# CORS
+# ─────────────────────────────────────────────────────────
+[cors]
+# Allow all origins. Default: false
+# DANGEROUS — only set true for local dashboard dev.
+allow_all_origins = false
+
+# Specific allowed origins (when allow_all_origins = false)
+# Example: ["http://localhost:3000", "https://your-dashboard.com"]
+allowed_origins = []
+
+# ─────────────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────────────
+[logging]
+# Log level: "trace" | "debug" | "info" | "warn" | "error". Default: "info"
+level = "info"
+
+# Log format: "json" | "text". Default: "json"
+# Use "text" for human-readable development logs.
+format = "json"
+
+# Include span traces in logs. Default: false
+include_spans = false
+
+# ─────────────────────────────────────────────────────────
+# Tokio Runtime
+# ─────────────────────────────────────────────────────────
+[runtime]
+# Worker thread count. 0 = auto (one per logical CPU core). Default: 0
+worker_threads = 0
+
+# ─────────────────────────────────────────────────────────
+# Windows Service
+# ─────────────────────────────────────────────────────────
+[service]
+# SCM service name (no spaces). Default: "NSPDaemon"
+name = "NSPDaemon"
+
+# Human-readable display name in services.msc. Default: "NSP Daemon"
+display_name = "NSP Daemon"
+
+# Service description
+description = "Nelieo State Protocol — Universal runtime substrate for AI agents"
+
+# Auto-start on boot. Default: true
+auto_start = true
+```
+
+---
+
+## Environment Variable Reference
+
+Every config key has a corresponding `AXON_*` environment variable. Variables always override the `.toml` file.
+
+**Format:** `AXON_<SECTION>__<KEY>` (double underscore as separator)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AXON_SERVER__PORT` | `7842` | Daemon port |
+| `AXON_SERVER__HOST` | `127.0.0.1` | Bind address |
+| `AXON_SERVER__REQUEST_TIMEOUT_MS` | `30000` | Standard route timeout |
+| `AXON_AUTH__REQUIRE_KEY` | `true` | Enable/disable auth |
+| `AXON_AUTH__KEYS_FILE` | system path | Path to keys JSON file |
+| `AXON_RATE_LIMIT__ENABLED` | `true` | Enable rate limiting |
+| `AXON_RATE_LIMIT__STATE_PER_SECOND` | `100` | State read rate limit |
+| `AXON_RATE_LIMIT__ACTION_PER_SECOND` | `10` | Action rate limit |
+| `AXON_WATCHER__POLL_INTERVAL_SECS` | `2` | State refresh interval |
+| `AXON_WATCHER__SCAN_INTERVAL_SECS` | `5` | Process scan interval |
+| `AXON_WATCHER__MIN_CONFIDENCE` | `0.4` | Minimum probe confidence |
+| `AXON_DISPATCHER__POST_ACTION_WAIT_MS` | `200` | Post-action settle time |
+| `AXON_REGISTRY__IN_MEMORY` | `false` | Ephemeral schema registry |
+| `AXON_LOGGING__LEVEL` | `info` | Log level |
+| `AXON_LOGGING__FORMAT` | `json` | Log format |
+| `AXON_CORS__ALLOW_ALL_ORIGINS` | `false` | Allow all CORS origins |
+
+### Example: CI / Testing Config
+
+```bash
+# Run daemon with no auth, in-memory registry, debug logging
+AXON_AUTH__REQUIRE_KEY=false \
+AXON_REGISTRY__IN_MEMORY=true \
+AXON_LOGGING__LEVEL=debug \
+AXON_LOGGING__FORMAT=text \
+axon-daemon.exe run
+```
+
+---
+
+## Minimal Dev Config
+
+For local development with a single agent:
+
+```toml
+# axon.toml (development)
+[auth]
+require_key = false
+
+[server]
+port = 7842
+
+[watcher]
+scan_interval_secs = 1
+poll_interval_secs = 1
+
+[registry]
+in_memory = true
+
+[rate_limit]
+enabled = false
+
+[logging]
+level = "debug"
+format = "text"
+```
+
+---
+
+## Startup Warnings
+
+The daemon emits startup warnings for insecure configurations:
+
+```
+⚠️  NSP DAEMON RUNNING WITHOUT AUTHENTICATION — All API requests pass without
+    a key. Set AXON_AUTH__REQUIRE_KEY=true before any production use.
+
+⚠️  CORS allow_all_origins=true — Any web origin can call this daemon.
+    Unsafe in production.
+```
+
+These warnings are intentional and loud. Do not suppress them — fix the configuration instead.

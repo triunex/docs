@@ -1,0 +1,90 @@
+---
+title: "Rate Limiting"
+description: "NSP's per-key rate limiting — limits, configuration, and handling 429 responses."
+---
+
+## Overview
+
+The daemon enforces rate limits per API key to prevent agents from overwhelming the system. Rate limits are implemented using a **token bucket** algorithm — short bursts are allowed, but sustained rates above the limit are throttled.
+
+---
+
+## Default Limits
+
+| Endpoint Category | Default Limit | Config Key |
+|------------------|---------------|-----------|
+| State reads (`GET /state`, `GET /apps`, `GET /schema`, `GET /diff`) | **100 requests/second** | `rate_limit.state_per_second` |
+| Action execution (`POST /action`, `POST /verify`) | **10 requests/second** | `rate_limit.action_per_second` |
+| Heap snapshots (`POST /action` with `fresh=true`) | **2 per minute** | `rate_limit.snapshot_per_minute` |
+| WebSocket streams | Not rate limited | — |
+| `GET /health` | Not rate limited | — |
+
+---
+
+## 429 Response
+
+When a rate limit is exceeded:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 1
+Content-Type: application/json
+
+{
+  "error": {
+    "code": "rate_limited",
+    "message": "Rate limit exceeded. Retry after 1 second.",
+    "retry_after_ms": 1000
+  }
+}
+```
+
+---
+
+## Configuration
+
+```toml
+[rate_limit]
+enabled = true
+
+# State reads (GET /state, GET /apps, etc.)
+state_per_second = 100
+
+# Action executions (POST /action)
+action_per_second = 10
+
+# Heap snapshots — expensive operations, keep low
+snapshot_per_minute = 2
+
+# How long to keep idle rate limit buckets in memory
+bucket_ttl_secs = 3600
+```
+
+---
+
+## Handling 429 in Python
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def with_retry(fn, max_retries=5):
+    for attempt in range(max_retries):
+        try:
+            return await fn()
+        except nsp.NSPRateLimitError as e:
+            if attempt == max_retries - 1:
+                raise
+            # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            wait = 2 ** attempt
+            await asyncio.sleep(wait)
+```
+
+---
+
+## Best Practices
+
+- **Use WebSocket streaming** instead of polling `GET /state` in a tight loop. Streaming is not rate-limited and delivers events immediately.
+- **Batch state reads** — if you need data from 5 different state keys, read them all in one `GET /state` call, not 5 separate calls.
+- **Respect `Retry-After`** — the response tells you exactly how long to wait.
+- **Increase limits for trusted agents** — if you control the daemon, raise `state_per_second` and `action_per_second` in `axon.toml` for your use case.

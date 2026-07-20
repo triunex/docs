@@ -1,0 +1,293 @@
+---
+title: "Architecture"
+description: "A deep-dive into how the NSP daemon, probes, semantic engine, and agent API fit together as a complete system."
+---
+
+## System Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  AI AGENT  (Python, TypeScript, Claude, GPT, custom LLM loop)               │
+│  GET /substrate/v1/state/{pid}   POST /substrate/v1/action                  │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │ HTTP / WebSocket   localhost:7842
+┌──────────────────────────────────▼──────────────────────────────────────────┐
+│  axon-api  (Axum REST + WebSocket server)                                    │
+│  ┌────────────────┐  ┌─────────────────┐  ┌──────────────────────────────┐  │
+│  │ Auth Middleware│  │ Rate Limiter    │  │ ActionDispatcher             │  │
+│  │ X-Substrate-Key│  │ StateQuery 100/s│  │ V8 / CLR / JVM / OS         │  │
+│  └────────────────┘  │ ActionExec 10/s │  └──────────────────────────────┘  │
+│                       └─────────────────┘                                   │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │ WatcherHandle (Arc<ProbeLifecycle>)
+┌──────────────────────────────────▼──────────────────────────────────────────┐
+│  axon-watcher  (Process lifecycle orchestrator)                              │
+│  ┌─────────────────┐  ┌───────────────────┐  ┌────────────────────────────┐ │
+│  │ ProcessScanner  │  │ RuntimeDetector   │  │ ProbeLifecycle             │ │
+│  │ sysinfo poll    │  │ V8/JVM/CLR/Native │  │ spawn / poll / cache       │ │
+│  │ every 500ms     │  │ classification    │  │ broadcast StateChange      │ │
+│  └─────────────────┘  └───────────────────┘  └────────────────────────────┘ │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │ per-runtime probe calls
+┌──────────────────────────────────▼──────────────────────────────────────────┐
+│  RUNTIME PROBES                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐ │
+│  │  axon-v8     │  │  axon-jvmti  │  │  axon-clr    │  │  axon-native    │ │
+│  │  CDP/ASO     │  │  JVMTI+JNI   │  │  MMF+Reflect │  │  ptrace/ReadMem │ │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
+└─────────┼─────────────────┼─────────────────┼───────────────────┼──────────┘
+          │                 │                 │                   │
+          ▼                 ▼                 ▼                   ▼
+     Chrome/Electron     Java/JVM         .NET/CLR          Native Binary
+     (port 9222+)        (JVMTI)          (MMF bridge)      (memory read)
+```
+
+---
+
+## Crate Reference
+
+The NSP daemon is a Rust workspace with 14 crates. Here's what each one does:
+
+### Core Infrastructure
+
+<AccordionGroup>
+
+<Accordion title="axon-types — Shared data structures">
+**Path:** `crates/axon-types/`
+
+The single source of truth for all shared types. Every other crate depends on this.
+
+Key types:
+- `SubstrateState` — the complete state of a running app
+- `ActionRequest` / `ActionResponse` — the action invocation contract
+- `ActionSchema` / `ParameterSchema` — typed action descriptors
+- `Reversibility` — Read / ReversibleWrite / IrreversibleWrite
+- `RuntimeKind` — V8 / Jvm / Clr / Native / Unknown
+- `AppContext` — current navigational context (URL, view, title)
+- `ProbeMetadata` — internal telemetry per state capture
+
+```rust
+// axon-types/src/ssf.rs
+pub struct SubstrateState {
+    pub capture_id: Uuid,
+    pub app_id: String,
+    pub runtime: RuntimeKind,
+    pub confidence: f32,
+    pub objects: HashMap<String, serde_json::Value>,
+    pub actions: HashMap<String, ActionSchema>,
+    pub probe_metadata: ProbeMetadata,
+}
+```
+</Accordion>
+
+<Accordion title="axon-daemon — Main binary + Windows Service">
+**Path:** `crates/axon-daemon/`
+
+The top-level executable. Handles:
+- CLI parsing (`axon-daemon run`, `axon-daemon install`, `axon-daemon keygen`)
+- Windows Service registration and SCM lifecycle
+- System tray icon with status indicators
+- Config loading from `axon.toml` + env vars + `.env`
+- Orchestrating `axon-api` + `axon-watcher` startup
+
+```rust
+// engine.rs — the core startup sequence
+pub async fn run_with_shutdown(config: DaemonConfig, shutdown_rx: ...) {
+    let key_store = ApiKeyStore::load_from_file(&config.auth.keys_file);
+    let registry = SchemaRegistry::new(db_path);
+    let (watcher_handle, change_rx) = WatcherService::new(config, registry).start();
+    let app_state = Arc::new(AppState::new(watcher_handle, change_tx, config, key_store));
+    let app = build_router(Arc::clone(&app_state));
+    axum::serve(listener, app).await
+}
+```
+</Accordion>
+
+<Accordion title="axon-api — REST + WebSocket server">
+**Path:** `crates/axon-api/`
+
+The complete Axum HTTP server. All 9 NSP endpoints, full middleware stack, action dispatcher, and state verifier.
+
+**Route table:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Liveness probe (no auth) |
+| `GET` | `/substrate/v1/apps` | List all tracked apps |
+| `GET` | `/substrate/v1/state/{pid}` | Full SubstrateState |
+| `GET` | `/substrate/v1/schema/{pid}` | Action schema |
+| `POST` | `/substrate/v1/action` | Execute action |
+| `GET` | `/substrate/v1/watch/{pid}` | WebSocket stream |
+| `GET` | `/substrate/v1/diff/{pid}` | State diff |
+| `POST` | `/substrate/v1/verify` | Standalone verify |
+| `POST` | `/substrate/v1/learn/{pid}` | Submit learning feedback |
+
+**Middleware stack (inner → outer):**
+
+1. Tracing + Request-ID (all routes)
+2. CORS (all routes)
+3. Body limit — 10MB default (all routes)
+4. Auth — `X-Substrate-Key` header (all routes; `/health` passes through)
+5. Rate limiting — `StateQuery` 100 req/s; `ActionExec` 10 req/s
+6. Timeout — standard routes 30s; action route 120s (separate routers)
+
+**Why two separate routers?**
+
+The action route runs on a physically separate `Router` so the global 30s timeout never wraps it. This is critical: action execution includes CDP cold probe attachment (~90s), command execution (~5s), post-action state settlement (~200ms), and verification polling.
+</Accordion>
+
+<Accordion title="axon-watcher — Process detection + probe lifecycle">
+**Path:** `crates/axon-watcher/`
+
+The "nervous system" of the daemon. Three sub-components:
+
+**ProcessScanner** — polls `sysinfo` every 500ms to enumerate all running processes. Emits `ScanEvent::Added` / `ScanEvent::Removed` for PID changes.
+
+**RuntimeDetector** — classifies each new process as V8/JVM/CLR/Native by inspecting:
+- Process name (`.exe` and binary name patterns)
+- Command-line arguments (`--remote-debugging-port=`, JVM flags, CLR hosting)
+- Loaded modules / DLLs
+- Open TCP ports (Chrome's CDP port)
+
+**ProbeLifecycle** — manages per-process probe state:
+- Spawns probe tasks when a new app is detected
+- Runs the fast poll loop (default 2s interval)
+- Caches the latest `SubstrateState` in an `Arc<DashMap<u32, Arc<SubstrateState>>>`
+- Broadcasts `StateChangeNotification` to all WebSocket subscribers on state change
+- Cleans up on process exit
+
+```rust
+// WatcherHandle — cheap clone, Arc-backed, used by axon-api
+pub struct WatcherHandle {
+    lifecycle: Arc<ProbeLifecycle>,
+}
+
+impl WatcherHandle {
+    pub fn get_state(&self, pid: u32) -> Option<Arc<SubstrateState>>;
+    pub fn all_states(&self) -> Vec<Arc<SubstrateState>>;
+    pub fn get_jvm_session(&self, pid: u32) -> Option<Arc<Mutex<Option<JvmSession>>>>;
+    pub fn get_clr_session(&self, pid: u32) -> Option<Arc<Mutex<Option<ClrSession>>>>;
+}
+```
+</Accordion>
+
+<Accordion title="axon-registry — Schema persistence">
+**Path:** `crates/axon-registry/`
+
+SQLite-backed schema registry that stores discovered action schemas and state structures across daemon restarts.
+
+- **In-memory mode** (`registry.in_memory = true`) — ephemeral, relearns on every restart. Good for development.
+- **Persistent mode** — stores schemas to `C:\ProgramData\Nelieo\axon_registry.db`. The daemon pre-populates schemas on first probe and reuses them on subsequent starts for instant state reads.
+
+Schema cache hit is visible in `probe_metadata.cache_hit = true`.
+</Accordion>
+
+<Accordion title="axon-schema — Schema discovery engine">
+**Path:** `crates/axon-schema/`
+
+Converts raw probe output (heap nodes, JVMTI field lists, CLR type trees) into versioned `ActionSchema` records and persists them to the registry.
+
+Schema versions follow semver — a schema version bump means the semantic mapping changed and agents should re-validate their state key references.
+</Accordion>
+
+<Accordion title="axon-semantic — Semantic labeling">
+**Path:** `crates/axon-semantic/`
+
+The semantic pipeline that converts unlabeled heap nodes into human-readable state keys.
+
+For V8 apps, this runs in two passes:
+1. **Rule-based pass** — matches well-known variable names and patterns (e.g., `inboxData`, `emailList`, `unreadCount`)
+2. **LLM-assisted pass** — for obfuscated apps (minified JavaScript), uses a local Qwen model to label candidates based on their value signatures and neighbors
+
+The Python `correlator` and `labeler` subpackages handle the vision-memory grounding and LLM labeling for native apps.
+</Accordion>
+
+<Accordion title="axon-os — OS control layer">
+**Path:** `crates/axon-os/`
+
+Handles OS-level operations that agents need beyond state reading:
+- App launching (with environment setup)
+- Window management (focus, minimize, resize)
+- File system operations
+- Keyboard and mouse input synthesis (fallback for native apps)
+- Screenshot capture (used as input to the semantic correlator)
+</Accordion>
+
+</AccordionGroup>
+
+---
+
+## Request Lifecycle — GET /state/{pid}
+
+```
+Agent → GET /substrate/v1/state/12847
+          │
+          ▼
+    [Middleware: Auth] X-Substrate-Key validated
+          │
+          ▼
+    [Middleware: Rate Limit] StateQuery bucket checked (100 req/s)
+          │
+          ▼
+    state_handler(pid=12847)
+          │
+          ├─ WatcherHandle::get_state(12847)
+          │     └─ DashMap lookup → Arc<SubstrateState>
+          │
+          ├─ If fresh=true: WatcherHandle::force_snapshot(12847)
+          │     └─ Wakes the fast poll loop immediately
+          │
+          ▼
+    StateResponse { SubstrateState } → JSON 200
+```
+
+**Typical latency:** 1–5ms (cached), 50–200ms (fresh fast-path), 47s (cold V8 snapshot fallback)
+
+---
+
+## Request Lifecycle — POST /action
+
+```
+Agent → POST /substrate/v1/action { action: "send_reply", parameters: {...} }
+          │
+          ▼
+    [Middleware: Auth + Rate Limit: ActionExec 10 req/s]
+          │
+          ▼
+    validate_action_safety()
+          ├─ Is action in SAFETY_REQUIRED_BUILTINS? → requires verify_expression
+          ├─ Is schema.reversibility == IrreversibleWrite? → requires verify_expression
+          └─ Is action name heuristically dangerous (delete/destroy/purge)? → requires verify_expression
+          │
+          ▼
+    ActionDispatcher::dispatch(request, state)
+          ├─ V8 app: cdp_action_handler → Runtime.evaluate via CDP WebSocket
+          ├─ CLR app: clr_action_handler → MMF command → managed bridge
+          ├─ JVM app: jvm_action_handler → JVMTI invoke
+          └─ OS fallback: os_action_handler → keyboard/mouse synthesis
+          │
+          ▼
+    [if verify_expression set] StateVerifier::poll()
+          ├─ Wait post_action_wait_ms (default 200ms)
+          ├─ Poll state up to 10 cycles (verify_timeout_ms / 500ms)
+          ├─ Evaluate JS expression against updated state
+          └─ Return VerificationOutcome { passed, changed_fields, ... }
+          │
+          ▼
+    ActionResponse { success, latency_ms, verification, state_delta } → JSON 200
+```
+
+---
+
+## Configuration Hierarchy
+
+Config is loaded from these sources in order (highest priority first):
+
+1. `AXON_*` environment variables (`AXON_SERVER__PORT=8080`)
+2. `.env` file in working directory
+3. `axon.toml` in working directory
+4. `%APPDATA%\Nelieo\axon.toml` (Windows user config)
+5. `C:\ProgramData\Nelieo\axon.toml` (Windows system config)
+6. Built-in defaults
+
+Full configuration reference: [Daemon Configuration](/daemon/configuration)

@@ -1,0 +1,165 @@
+---
+title: "GET /state/{pid}"
+description: "Get the full semantic state snapshot for a tracked process."
+---
+
+## Endpoint
+
+```http
+GET /substrate/v1/state/{pid}?fresh=false
+Authorization: X-Substrate-Key: <key>
+```
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pid` | `integer` | OS process ID from `GET /apps` |
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `fresh` | `boolean` | `false` | If `true`, triggers a fresh probe cycle before returning. Adds 50ms–90s latency. |
+
+---
+
+## Response
+
+The response is a **flat JSON object** — the `SubstrateState` fields are all at the top level (not nested in a wrapper object).
+
+```json
+{
+  "capture_id": "0196f4a2-3b5c-7d00-8e1f-9a0b2c3d4e5f",
+  "app_id": "gmail-chrome-12847",
+  "app_name": "Gmail",
+  "pid": 12847,
+  "runtime": "v8",
+  "schema_version": "1.4.2",
+  "captured_at": "2026-07-20T13:00:00Z",
+  "confidence": 0.97,
+  "context": {
+    "url": "https://mail.google.com/mail/u/0/#inbox",
+    "location": "/inbox",
+    "view": "gmail_inbox",
+    "window_title": "Inbox (47) - Gmail",
+    "window_id": "tab_8821af3"
+  },
+  "objects": {
+    "inbox.unread_count": 47,
+    "inbox.total_count": 1284,
+    "inbox.emails[0].id": "msg_18821af3",
+    "inbox.emails[0].thread_id": "thread_7af2b3",
+    "inbox.emails[0].from": "alice@example.com",
+    "inbox.emails[0].subject": "Q3 Performance Report",
+    "inbox.emails[0].snippet": "Please review the attached Q3 report...",
+    "inbox.emails[0].is_read": false,
+    "inbox.emails[0].has_attachments": true,
+    "inbox.emails[0].received_at": "2026-07-20T09:15:00Z",
+    "inbox.emails[1].id": "msg_17721b3f",
+    "inbox.emails[1].from": "bob@example.com",
+    "inbox.emails[1].subject": "Meeting tomorrow at 3pm",
+    "inbox.emails[1].is_read": false
+  },
+  "actions": {
+    "send_reply": {
+      "signature": "fn(thread_id: string, body: string, cc?: string[]) -> bool",
+      "reversibility": "irreversible_write",
+      "description": "Send a reply to an email thread",
+      "confidence": 0.99,
+      "parameters": [
+        { "name": "thread_id", "type_name": "string", "required": true },
+        { "name": "body", "type_name": "string", "required": true },
+        { "name": "cc", "type_name": "array", "required": false }
+      ]
+    },
+    "archive": {
+      "signature": "fn(email_id: string) -> bool",
+      "reversibility": "reversible_write",
+      "confidence": 0.99,
+      "parameters": [
+        { "name": "email_id", "type_name": "string", "required": true }
+      ]
+    }
+  },
+  "probe_metadata": {
+    "capture_latency_ms": 28,
+    "labeling_latency_ms": 12,
+    "total_latency_ms": 51,
+    "raw_object_count": 8472,
+    "filtered_object_count": 23,
+    "cache_hit": true,
+    "dom_tier_used": false,
+    "probe_tier": "aso_fast"
+  }
+}
+```
+
+### Top-Level Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `capture_id` | `string` (UUIDv7) | Time-ordered unique capture ID |
+| `app_id` | `string` | Stable app identifier |
+| `app_name` | `string` | Human-readable name |
+| `pid` | `integer` | OS process ID |
+| `runtime` | `string` | Runtime kind |
+| `schema_version` | `string` | Semantic schema version (semver) |
+| `captured_at` | `datetime` | ISO 8601 timestamp |
+| `confidence` | `float` | 0.0–1.0 probe quality |
+| `context` | `AppContext` | Navigational context |
+| `objects` | `object` | Dot-notation state key-value map |
+| `actions` | `object` | Available action schemas |
+| `probe_metadata` | `object` | Internal telemetry |
+
+### `probe_metadata` Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `capture_latency_ms` | `integer` | Time to read from runtime (ms) |
+| `labeling_latency_ms` | `integer` | Time for semantic labeling (ms) |
+| `total_latency_ms` | `integer` | End-to-end wall time (ms) |
+| `raw_object_count` | `integer` | Objects before filtering |
+| `filtered_object_count` | `integer` | Objects after filtering |
+| `cache_hit` | `boolean` | Whether schema was read from cache |
+| `probe_tier` | `string` | `aso_fast` / `heap_snapshot` / `jvmti` / `clr_mmf` |
+
+---
+
+## Examples
+
+<CodeGroup>
+```bash cURL
+curl -H "X-Substrate-Key: sk_nsp_..." \
+     http://localhost:7842/substrate/v1/state/12847
+```
+
+```bash cURL (fresh)
+curl -H "X-Substrate-Key: sk_nsp_..." \
+     "http://localhost:7842/substrate/v1/state/12847?fresh=true"
+```
+
+```python Python SDK
+# Cached (fast)
+state = await client.get_state(12847)
+print(state.confidence)
+print(state.objects.get("inbox.unread_count"))
+
+# Fresh (slower)
+state = await client.get_state(12847, fresh=True)
+
+# Via session
+session = await client.attach("Gmail")
+state = await session.refresh()
+```
+</CodeGroup>
+
+---
+
+## Error Responses
+
+| Status | Code | Description |
+|--------|------|-------------|
+| `404` | `not_found` | PID not tracked |
+| `503` | `probe_not_ready` | Cold probe still in progress |
+| `504` | `probe_timeout` | Fresh probe timed out |

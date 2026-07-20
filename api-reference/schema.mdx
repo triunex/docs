@@ -1,0 +1,65 @@
+---
+title: "GET /schema/{pid}"
+description: "Get the action schema for a tracked process — without the full state objects."
+---
+
+## Endpoint
+
+```http
+GET /substrate/v1/schema/{pid}
+Authorization: X-Substrate-Key: <key>
+```
+
+Returns only the `actions` map from the `SubstrateState`. Useful when you want to discover what actions are available without fetching the full state.
+
+---
+
+## Response
+
+```json
+{
+  "pid": 12847,
+  "app_id": "gmail-chrome-12847",
+  "app_name": "Gmail",
+  "schema_version": "1.4.2",
+  "actions": {
+    "send_reply": {
+      "signature": "fn(thread_id: string, body: string, cc?: string[]) -> bool",
+      "reversibility": "irreversible_write",
+      "description": "Send a reply to an email thread",
+      "confidence": 0.99,
+      "parameters": [
+        { "name": "thread_id", "type_name": "string", "required": true },
+        { "name": "body", "type_name": "string", "required": true },
+        { "name": "cc", "type_name": "array", "required": false }
+      ]
+    },
+    "archive": {
+      "signature": "fn(email_id: string) -> bool",
+      "reversibility": "reversible_write",
+      "description": "Move an email to the archive",
+      "confidence": 0.99,
+      "parameters": [
+        { "name": "email_id", "type_name": "string", "required": true }
+      ]
+    }
+  }
+}
+```
+
+---
+
+## Example
+
+```bash
+curl -H "X-Substrate-Key: sk_nsp_..." \
+     http://localhost:7842/substrate/v1/schema/12847
+```
+
+```python
+# Via SDK — read from session
+for name, schema in session.actions.items():
+    print(f"{name}: {schema.signature}")
+    print(f"  Reversibility: {schema.reversibility}")
+    print(f"  Required params: {[p.name for p in schema.required_params]}")
+```

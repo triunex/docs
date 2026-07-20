@@ -1,0 +1,275 @@
+---
+title: "NSPSession"
+description: "The high-level interface for interacting with a single attached application — state access, action execution, streaming, and wait patterns."
+---
+
+## Overview
+
+`NSPSession` is created by calling `client.attach()` or `client.session()`. It bundles a PID and app_id together so you never have to pass them around manually.
+
+State is **cached locally** and refreshed on demand or automatically via WebSocket streaming.
+
+---
+
+## Creating a Session
+
+```python
+# By name (most common)
+session = await client.attach("Gmail")
+
+# By PID
+session = await client.attach_by_pid(12847)
+
+# With fresh probe (forces re-read before session opens)
+session = await client.attach("Gmail", fresh=True)
+```
+
+---
+
+## Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `session.state` | `SubstrateState` | Cached state snapshot (call `refresh()` to update) |
+| `session.pid` | `int` | OS process ID |
+| `session.app_id` | `str` | Stable semantic app identifier |
+| `session.app_name` | `str` | Human-readable name |
+| `session.confidence` | `float` | Probe confidence of cached state (0.0–1.0) |
+| `session.actions` | `dict[str, ActionSchema]` | Available actions |
+| `session.clr` | `CLRSessionProxy` | .NET-specific helpers |
+| `session.jvm` | `JVMSessionProxy` | Java-specific helpers |
+
+---
+
+## State Access
+
+### Basic Accessors
+
+```python
+# Typed read helpers — never throw, return default on missing key
+value   = session.get("inbox.unread_count")           # Any
+count   = session.get_int("inbox.unread_count", 0)    # int
+alt     = session.get_float("flight.altitude_m", 0.0) # float
+is_read = session.get_bool("inbox.emails[0].is_read") # bool
+subject = session.get_str("inbox.emails[0].subject")  # str
+
+# Access full state object
+state = session.state
+
+# Read directly from state
+from_field = state.objects.get("inbox.emails[0].from")
+
+# Prefix query — get all keys under a namespace
+inbox_data = state.keys_with_prefix("inbox.")
+# {'inbox.unread_count': 47, 'inbox.total_count': 1284, ...}
+```
+
+### Check Action Availability
+
+```python
+# Can we execute this action at current confidence?
+if session.state.can_execute("send_reply"):
+    print("Safe to send")
+else:
+    print(f"Confidence {session.confidence:.2f} too low")
+
+# Look up an action schema
+schema = session.state.action("archive")
+if schema:
+    print(f"Min confidence required: {schema.min_confidence_required}")
+    print(f"Is destructive: {schema.is_destructive}")
+```
+
+---
+
+## State Refresh
+
+```python
+# Refresh cached state from daemon (uses fast-path cache, ~1ms)
+state = await session.refresh()
+
+# Force a new probe cycle (50ms–90s depending on runtime)
+state = await session.refresh(fresh_probe=True)
+```
+
+---
+
+## Action Execution
+
+### `execute(action, *, parameters, verify, verify_expression, verify_timeout_ms, auto_refresh)`
+
+```python
+# Simple read-type action — no verification needed
+result = await session.execute(
+    "get_thread",
+    parameters={"thread_id": "msg_18821af3"},
+)
+print(result.raw_return)  # {"subject": "...", "body": "...", ...}
+
+# Reversible write — no verify needed (but allowed)
+result = await session.execute(
+    "archive",
+    parameters={"email_id": "msg_18821af3"},
+)
+print(f"Success: {result.success}")
+
+# Irreversible write — verify=True REQUIRED
+result = await session.execute(
+    "send_reply",
+    parameters={
+        "thread_id": "msg_18821af3",
+        "body": "Thanks, I'll review this.",
+    },
+    verify=True,
+    verify_expression="inbox.sent_count > 0",
+    verify_timeout_ms=5000,  # Poll for up to 5 seconds
+)
+print(f"Reply sent: {result.success}  verified: {result.verification.passed}")
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `action` | `str` | required | Action name from `session.actions` |
+| `parameters` | `dict` | `{}` | Parameters matching the action schema |
+| `verify` | `bool \| None` | `None` | Enable post-action verification. Auto-set to `True` for `IrreversibleWrite` |
+| `verify_expression` | `str \| None` | `None` | JS expression evaluated against post-action state |
+| `verify_timeout_ms` | `int` | `5000` | How long to poll for settlement (100–30000ms) |
+| `auto_refresh` | `bool` | `True` | Refresh cached state after action completes |
+
+**Raises:**
+- `NSPActionError` — action ran but failed at the app level
+- `NSPIrreversibleNotConfirmedError` — tried `verify=False` on `IrreversibleWrite` action
+- `NSPConfidenceTooLowError` — probe confidence below action threshold
+- `NSPTimeoutError` — verification polling timed out
+
+---
+
+## Watch Stream
+
+```python
+# Basic stream
+async with session.watch() as stream:
+    async for event in stream:
+        print(f"Changed: {event.changed_keys}")
+        print(f"Sequence: {event.sequence}")
+        print(f"Timestamp: {event.captured_at}")
+
+# Auto-refresh cached state on every event
+async with session.watch(auto_refresh_on_event=True) as stream:
+    async for event in stream:
+        # session.state is automatically updated here
+        unread = session.get_int("inbox.unread_count")
+        print(f"Unread: {unread}")
+
+# Bounded queue (drop oldest if consumer is slow)
+async with session.watch(max_queue=64, auto_reconnect=True) as stream:
+    async for event in stream:
+        ...
+```
+
+---
+
+## Wait Patterns
+
+### `wait_for(predicate, *, timeout, poll_interval, fresh_probe)`
+
+Poll state until a condition is met:
+
+```python
+# Wait until the email is read
+state = await session.wait_for(
+    lambda s: s.get_bool("inbox.emails[0].is_read"),
+    timeout=30.0,
+    poll_interval=1.0,
+)
+print("Email marked as read")
+
+# Wait until drone is armed
+state = await session.wait_for(
+    lambda s: s.get_bool("flight.is_armed"),
+    timeout=60.0,
+    poll_interval=0.5,
+    fresh_probe=True,  # Force fresh probe each cycle
+)
+```
+
+### `wait_for_key(key, *, expected_value, timeout, poll_interval, fresh_probe)`
+
+Wait for a specific key to reach a value:
+
+```python
+# Wait for flight mode to become GUIDED
+state = await session.wait_for_key(
+    "flight.mode",
+    expected_value="GUIDED",
+    timeout=30.0,
+)
+```
+
+### `wait_for_change(key, *, timeout, poll_interval)`
+
+Wait for a specific key to change from its current value:
+
+```python
+# Get current sent count
+before = session.get_int("inbox.sent_count")
+
+# Send a reply
+await session.execute("send_reply", ...)
+
+# Wait for sent count to increase
+await session.wait_for(
+    lambda s: s.get_int("inbox.sent_count") > before,
+    timeout=10.0,
+)
+```
+
+---
+
+## Complete Agent Example
+
+```python
+import asyncio
+import nelieo_nsp as nsp
+
+async def email_responder():
+    """Read all unread emails and send a canned reply."""
+    
+    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+        session = await client.attach("Gmail")
+        
+        print(f"Connected to Gmail (conf={session.confidence:.2f})")
+        
+        unread = session.get_int("inbox.unread_count")
+        print(f"Processing {unread} unread emails...")
+        
+        # Process each unread email
+        for i in range(min(unread, 10)):  # Max 10 for safety
+            await session.refresh()
+            
+            email_id = session.get_str(f"inbox.emails[{i}].id")
+            thread_id = session.get_str(f"inbox.emails[{i}].thread_id")
+            subject = session.get_str(f"inbox.emails[{i}].subject")
+            sender = session.get_str(f"inbox.emails[{i}].from")
+            
+            if not session.get_bool(f"inbox.emails[{i}].is_read"):
+                print(f"  Replying to: '{subject}' from {sender}")
+                
+                # Send reply — requires verify=True (irreversible)
+                result = await session.execute(
+                    "send_reply",
+                    parameters={
+                        "thread_id": thread_id,
+                        "body": f"Thank you for your email. I'll get back to you shortly.",
+                    },
+                    verify=True,
+                    verify_expression="inbox.sent_count > 0",
+                )
+                
+                if result.success:
+                    print(f"    ✅ Sent in {result.latency_ms}ms")
+                else:
+                    print(f"    ❌ Failed: {result.error_message}")
+
+asyncio.run(email_responder())
+```

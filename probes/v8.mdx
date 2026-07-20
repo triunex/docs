@@ -1,0 +1,191 @@
+---
+title: "V8 / JavaScript Probe"
+description: "How NSP reads state from Chrome, Electron, and Node.js applications using the Chrome DevTools Protocol."
+---
+
+## What the V8 Probe Does
+
+The `axon-v8` crate connects to any running Chrome or Electron process via the **Chrome DevTools Protocol (CDP)** and extracts the application's live data model as structured SSF JSON — in milliseconds, without screenshots.
+
+**Supported runtimes:**
+- Google Chrome (any tab)
+- Electron applications (VS Code, Slack, WhatsApp Desktop, Discord, Notion, GitHub Desktop, Figma Desktop, Postman, etc.)
+- Node.js processes (when launched with `--inspect`)
+
+---
+
+## How Chrome Detection Works
+
+The process watcher (`axon-watcher`) detects Chrome and Electron processes by scanning:
+
+1. **Command-line arguments** — looking for `--remote-debugging-port=NNNN`
+2. **Process name** — `chrome.exe`, `msedge.exe`, `electron.exe`, `code.exe`, `slack.exe`, etc.
+3. **Open ports** — scanning port 9222 and common Electron debug ports
+
+When detected, the process is classified as `RuntimeKind::V8` and handed to the V8 probe pipeline.
+
+---
+
+## Two-Tier Extraction Architecture
+
+The V8 probe uses two methods, in order of preference:
+
+### Tier 1: ASO Fast-Path (5–50ms)
+
+**ASO (Axon Semantic Oracle)** is a JavaScript snippet that NSP injects into the running tab via `Runtime.evaluate`. The script locates the application's data layer in the live V8 heap and returns it as a serializable JSON object.
+
+```
+probe_tab() called
+  │
+  ▼
+inject_aso_now()  ← CDP Runtime.evaluate: installs __axon_aso_snapshot
+  │
+  ▼
+Poll up to 40 times (600ms window):
+  get_aso_snapshot() ← CDP Runtime.evaluate: reads __axon_aso_snapshot
+  │
+  ├─ Success → normalize_aso_snapshot() → SubstrateState  ✓ (5–50ms)
+  │
+  └─ Null → fall back to Tier 2
+```
+
+**Why ASO can be null:** Navigation events clear the injected script. The probe re-injects on the next poll cycle.
+
+### Tier 2: Heap Snapshot Fallback (~47s)
+
+When ASO fails (new app, navigation, obfuscated codebase), the probe takes a full V8 heap snapshot:
+
+```
+capture_snapshot()    ← CDP HeapProfiler.takeHeapSnapshot
+  │ (~30–47s for large apps)
+  ▼
+parse_snapshot()      ← Decode flat-array node/edge binary format
+  │
+  ▼
+filter_snapshot()     ← Remove V8 internals, score and rank app objects
+  │
+  ▼
+normalize()           ← Apply rule-based labels + queue for LLM enrichment
+  │
+  ▼
+SubstrateState with confidence ~0.85
+```
+
+<Note>
+  The heap snapshot fallback is **only needed once per app** (or after a major navigation). After the first successful cold probe, ASO is installed and all subsequent polls use the 50ms fast path.
+</Note>
+
+---
+
+## Launching Chrome for V8 Probing
+
+Chrome must be launched with the remote debugging port enabled:
+
+```cmd
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+```
+
+### Port Configuration
+
+The default port is `9222`. Electron apps each use their own port, which NSP detects automatically from the process command line.
+
+If you need a custom port:
+
+```toml
+# axon.toml
+[v8]
+debug_ports = [9222, 9223, 9224]  # scan these ports
+```
+
+---
+
+## Supported Applications (V8)
+
+| Application | App ID Pattern | Notes |
+|-------------|---------------|-------|
+| Gmail | `gmail-*` | Requires Chrome with CDP port |
+| Google Calendar | `google-calendar-*` | Same Chrome instance |
+| Slack | `slack-*` | Electron — port auto-detected |
+| VS Code | `vscode-*` | Electron — full extension state |
+| Notion | `notion-*` | Electron |
+| WhatsApp Desktop | `whatsapp-desktop-*` | Electron |
+| Discord | `discord-*` | Electron |
+| GitHub Desktop | `github-desktop-*` | Electron |
+| Salesforce | `salesforce-*` | Chrome tab |
+| HubSpot | `hubspot-*` | Chrome tab |
+| Any Electron app | `<exe-name>-*` | Auto-detected |
+
+---
+
+## The `probe_tab()` Function
+
+The primary entry point for the V8 probe:
+
+```rust
+pub async fn probe_tab(
+    debug_port: u16,        // CDP debug port (e.g. 9222)
+    url_filter: &str,       // URL hint to select the right tab
+    config: &ProbeConfig,   // Probe settings
+    known_pid: u32,         // OS PID (0 to auto-resolve)
+) -> Result<NormalizeOutput, ProbeError>
+```
+
+**`NormalizeOutput`** contains:
+- `.state` — partially-labeled `SubstrateState`
+- `.candidates` — unlabeled obfuscated objects for LLM enrichment
+- `.is_fast_read` — whether ASO fast-path was used
+- `.dom_tier_used` — whether DOM-tier 2 enrichment ran
+
+---
+
+## Fast-Path After Cold Probe
+
+Once a cold probe succeeds, `install_probe_anchor()` installs the ASO script permanently in the tab. Subsequent polls use `probe_tab_fast()`:
+
+```rust
+pub async fn probe_tab_fast(
+    debug_port: u16,
+    url_filter: &str,
+    anchor: &ProbeAnchor,   // Produced by the initial cold probe
+    existing_client: Option<InspectorClient>,  // Reuse open WebSocket
+) -> Result<(NormalizeOutput, InspectorClient), ProbeError>
+```
+
+**Typical fast-path latency:** 5–20ms on localhost
+
+---
+
+## V8 Action Execution
+
+V8 actions are executed by injecting a JavaScript call into the running tab:
+
+```rust
+// V8 action execution simplified
+let result = Runtime::evaluate(
+    &client,
+    &format!(
+        "window.__axon_dispatch_action('{}', {})",
+        action_name,
+        serde_json::to_string(&parameters)?
+    ),
+).await?;
+```
+
+CDP built-in actions (like `click`, `type`, `navigate`) are dispatched using the `Input` and `Page` CDP domains directly — no JavaScript injection required.
+
+---
+
+## ProbeConfig
+
+```rust
+pub struct ProbeConfig {
+    pub snapshot: SnapshotConfig,  // Heap snapshot settings
+    pub filter: FilterConfig,      // Object filtering thresholds
+    pub extract_actions: bool,     // Whether to discover actions
+}
+
+impl ProbeConfig {
+    pub fn default() -> Self  // Full probe (90% of use cases)
+    pub fn fast() -> Self     // Strict filter, no action extraction (monitoring)
+}
+```

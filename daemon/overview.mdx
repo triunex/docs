@@ -1,0 +1,108 @@
+---
+title: "Daemon Overview"
+description: "What the NSP daemon is, what it does, and how to run it."
+---
+
+## What is the Daemon?
+
+`axon-daemon` is the heart of NSP. It is a long-running background process that:
+
+1. **Watches** all running OS processes and detects supported applications
+2. **Probes** each app's runtime to extract live semantic state
+3. **Caches** the latest `SubstrateState` for every tracked process
+4. **Serves** the NSP Agent API on `localhost:7842`
+5. **Streams** real-time state change notifications over WebSocket
+6. **Executes** typed actions inside target applications
+
+The daemon is packaged as a Windows Service that auto-starts on login. It requires no ongoing maintenance once configured.
+
+---
+
+## Running the Daemon
+
+### As a Windows Service (recommended)
+
+After installation, the daemon runs automatically as `NSPDaemon` in Windows Services.
+
+```powershell
+# Check status
+Get-Service -Name NSPDaemon
+
+# Stop the service
+Stop-Service -Name NSPDaemon
+
+# Start the service
+Start-Service -Name NSPDaemon
+
+# Restart
+Restart-Service -Name NSPDaemon
+```
+
+### Foreground Mode (development)
+
+```bash
+# Run in foreground with default config
+axon-daemon.exe run
+
+# Run with a specific config file
+axon-daemon.exe run --config path/to/axon.toml
+
+# Run with debug logging
+axon-daemon.exe run --log-level debug
+```
+
+### CLI Reference
+
+```
+axon-daemon.exe <COMMAND>
+
+Commands:
+  run        Start the daemon in foreground mode
+  install    Register as a Windows Service
+  uninstall  Remove the Windows Service registration
+  start      Start the installed Windows Service
+  stop       Stop the running Windows Service
+  keygen     Generate a new API key and add it to the keys file
+  status     Show daemon status and tracked processes
+  help       Print help
+```
+
+---
+
+## Key Endpoints at a Glance
+
+Once running, verify with:
+
+```bash
+curl http://localhost:7842/health
+```
+
+```json
+{
+  "status": "ok",
+  "version": "1.0.0",
+  "uptime_secs": 3600,
+  "tracked_processes": 3,
+  "auth_enabled": true
+}
+```
+
+---
+
+## Log Output
+
+By default, logs are written to stdout in JSON format:
+
+```json
+{"timestamp":"2026-07-20T13:00:00Z","level":"INFO","target":"axon_daemon::engine","message":"NSP Daemon engine starting","version":"1.0.0","port":7842,"auth":true}
+{"timestamp":"2026-07-20T13:00:01Z","level":"INFO","target":"axon_watcher::lifecycle","message":"New V8 app detected","app_id":"gmail-12847","pid":12847,"confidence":0.97}
+{"timestamp":"2026-07-20T13:00:03Z","level":"INFO","target":"axon_v8","message":"V8 probe complete: 23 SSF objects in 51ms","app_id":"gmail-12847"}
+```
+
+For human-readable output during development:
+
+```toml
+[logging]
+format = "text"
+level = "debug"
+```

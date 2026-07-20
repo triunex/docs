@@ -1,0 +1,99 @@
+---
+title: "POST /verify"
+description: "Evaluate a verification expression against the current state of a tracked process."
+---
+
+## Endpoint
+
+```http
+POST /substrate/v1/verify
+Authorization: X-Substrate-Key: <key>
+Content-Type: application/json
+```
+
+Evaluates a JS-style expression against the current `SubstrateState`. Useful for pre-flight checks and post-action validation in custom agent loops.
+
+---
+
+## Request Body
+
+```json
+{
+  "pid": 12847,
+  "expression": "inbox.unread_count < 10 && inbox.emails[0].is_read == true",
+  "timeout_ms": 5000
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pid` | `integer` | Either this or `app_id` | Target PID |
+| `app_id` | `string` | Either this or `pid` | Target app ID |
+| `expression` | `string` | ✓ | JS expression to evaluate |
+| `timeout_ms` | `integer` | — | How long to poll (100–30000ms, default: 5000) |
+
+---
+
+## Response
+
+```json
+{
+  "passed": true,
+  "expression": "inbox.unread_count < 10 && inbox.emails[0].is_read == true",
+  "computed_value": true,
+  "explanation": "Expression evaluated to true after 1 poll cycle",
+  "latency_ms": 52,
+  "poll_cycles": 1,
+  "changed_fields": []
+}
+```
+
+---
+
+## Supported Expressions
+
+Expressions are simple JavaScript-like predicates evaluated against the `objects` map:
+
+```javascript
+// Equality
+"inbox.emails[0].is_read == true"
+
+// Comparison
+"inbox.unread_count < 10"
+"flight.altitude_m > 45.0"
+
+// Logical AND/OR
+"flight.is_armed == true && flight.mode == 'GUIDED'"
+
+// Negation
+"inbox.emails[0].id != 'msg_18821af3'"
+
+// Existence check
+"inbox.unread_count > 0"
+
+// String contains (JS)
+"context.url.includes('inbox')"
+```
+
+---
+
+## Example
+
+```bash
+curl -X POST http://localhost:7842/substrate/v1/verify \
+  -H "X-Substrate-Key: sk_nsp_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pid": 12847,
+    "expression": "inbox.unread_count > 0",
+    "timeout_ms": 3000
+  }'
+```
+
+```python
+# Check state before taking action
+state = await session.refresh()
+if state.get_int("inbox.unread_count") > 0:
+    # Proceed with action
+    pass
+```

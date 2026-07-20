@@ -1,0 +1,129 @@
+---
+title: "Guide: Chrome Setup"
+description: "Configure Chrome and Electron apps for V8 probing — launch flags, port management, and profile configuration."
+---
+
+## Why Chrome Needs a Debug Port
+
+Chrome's JavaScript engine (V8) exposes the **Chrome DevTools Protocol (CDP)** for external tools — debuggers, test runners, profilers, and NSP. By default, this port is disabled for security. You must enable it at launch.
+
+---
+
+## Launching Chrome for NSP
+
+### Basic Launch (Port 9222)
+
+```cmd
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+```
+
+<Warning>
+  Close all existing Chrome windows first. Chrome only allows one debugging session per user profile. If another Chrome is running, it will ignore the flag.
+</Warning>
+
+### PowerShell
+
+```powershell
+# Close existing Chrome
+Stop-Process -Name chrome -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+
+# Launch with debug port
+Start-Process "chrome.exe" -ArgumentList "--remote-debugging-port=9222"
+```
+
+### With a Dedicated Profile (Recommended)
+
+Using a separate profile lets you keep your normal Chrome session running alongside NSP-enabled Chrome:
+
+```cmd
+"C:\Program Files\Google\Chrome\Application\chrome.exe" ^
+  --remote-debugging-port=9222 ^
+  --user-data-dir="C:\Temp\ChromeNSP"
+```
+
+---
+
+## Verifying CDP is Active
+
+```bash
+curl http://localhost:9222/json/version
+```
+
+```json
+{
+  "Browser": "Chrome/127.0.0.0",
+  "Protocol-Version": "1.3",
+  "webSocketDebuggerUrl": "ws://localhost:9222/devtools/browser/..."
+}
+```
+
+If this fails, Chrome isn't running with CDP enabled.
+
+---
+
+## Multiple Chrome Tabs
+
+NSP can probe multiple tabs simultaneously. The daemon selects the right tab based on URL matching in its signature registry.
+
+Open these tabs in the same Chrome window:
+- `mail.google.com` → classified as Gmail
+- `calendar.google.com` → classified as Google Calendar  
+- `app.slack.com` → classified as Slack Web
+
+Each appears as a separate entry in `GET /apps`.
+
+---
+
+## Electron Apps
+
+Electron apps (VS Code, Slack Desktop, Discord, etc.) embed their own Chromium and expose CDP on their own port. NSP detects these automatically from the process command line.
+
+**VS Code:**
+```cmd
+# VS Code uses its own port (usually 9229)
+code.exe  # NSP detects automatically
+```
+
+**Slack Desktop:**
+```cmd
+# Slack Desktop embeds Electron
+slack.exe  # NSP detects automatically
+```
+
+**Custom Electron App:**
+If your Electron app doesn't expose CDP, launch it with:
+```cmd
+your-app.exe --remote-debugging-port=9223
+```
+
+---
+
+## Security Considerations
+
+- CDP gives full remote code execution access to the browser — keep the port on `127.0.0.1` (localhost)
+- Never expose port 9222 to a network interface
+- The debug session is only as secure as your machine's localhost access
+- Use a dedicated Chrome profile for NSP to isolate session data
+
+---
+
+## Windows Shortcut Setup
+
+Create a desktop shortcut for NSP-enabled Chrome:
+
+1. Right-click Desktop → New → Shortcut
+2. Location: `"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\Temp\ChromeNSP"`
+3. Name: `Chrome (NSP)`
+
+---
+
+## Common Issues
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| `curl localhost:9222` returns nothing | Chrome not running with CDP | Close all Chrome → relaunch with `--remote-debugging-port=9222` |
+| Multiple Chrome instances | Another Chrome with a different profile | Use `--user-data-dir` to isolate |
+| `GET /apps` doesn't show Gmail | Gmail tab not open | Open `mail.google.com` in Chrome |
+| `confidence: 0.40` stuck low | First probe in progress | Wait 30–90s for cold probe to complete |
+| Electron app not detected | No `--remote-debugging-port` flag | Launch with `--remote-debugging-port=NNNN` |
