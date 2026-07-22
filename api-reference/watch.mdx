@@ -14,7 +14,7 @@ ws://127.0.0.1:7842/substrate/v1/watch/{pid}?key=<api_key>
 Pass the API key as a query parameter (WebSocket headers aren't supported by all clients):
 
 ```
-ws://localhost:7842/substrate/v1/watch/12847?key=sk_nsp_...
+ws://localhost:7842/substrate/v1/watch/12847?key=nsp_live_sk_...
 ```
 
 ---
@@ -59,7 +59,7 @@ The server sends JSON messages whenever the tracked process state changes:
 
 ```javascript
 const ws = new WebSocket(
-  `ws://localhost:7842/substrate/v1/watch/12847?key=sk_nsp_...`
+  `ws://localhost:7842/substrate/v1/watch/12847?key=nsp_live_sk_...`
 );
 
 ws.onmessage = (msg) => {

@@ -42,7 +42,7 @@ import nelieo_nsp as nsp
 
 async def main():
     # ── Connect ────────────────────────────────────────────────────────
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         
         # ── Discover apps ────────────────────────────────────────────
         apps = await client.list_apps()
@@ -127,7 +127,7 @@ from nelieo_nsp import (
 
 ```bash
 # API key (alternative to passing api_key= in code)
-export NSP_API_KEY=sk_nsp_a1b2c3...
+export NSP_API_KEY=nsp_live_sk_a1b2c3...
 
 # Daemon host/port (if not using localhost:7842)
 export NSP_HOST=127.0.0.1

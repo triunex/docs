@@ -33,7 +33,7 @@ Open `mail.google.com` in any tab. The daemon detects Gmail automatically within
 ## Step 2: Verify Detection
 
 ```bash
-curl -H "X-Substrate-Key: sk_nsp_..." http://localhost:7842/substrate/v1/apps
+curl -H "X-Substrate-Key: nsp_live_sk_..." http://localhost:7842/substrate/v1/apps
 ```
 
 You should see Gmail listed with `confidence >= 0.95`.
@@ -47,7 +47,7 @@ import asyncio
 import nelieo_nsp as nsp
 from loguru import logger
 
-API_KEY = "sk_nsp_your_key_here"
+API_KEY = "nsp_live_sk_your_key_here"
 
 class GmailAgent:
     def __init__(self):

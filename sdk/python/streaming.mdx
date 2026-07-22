@@ -133,7 +133,7 @@ except asyncio.CancelledError:
 import asyncio
 
 async def watch_all():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         apps = await client.list_apps()
         sessions = [await client.session(app.pid) for app in apps]
         
@@ -200,7 +200,7 @@ ws://localhost:7842/substrate/v1/watch/{pid}
 Authentication is via a URL query parameter:
 
 ```
-ws://localhost:7842/substrate/v1/watch/12847?key=sk_nsp_...
+ws://localhost:7842/substrate/v1/watch/12847?key=nsp_live_sk_...
 ```
 
 Message format (JSON):

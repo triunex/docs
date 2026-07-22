@@ -169,7 +169,7 @@ If the PID can't be resolved and the action name contains `delete`, `destroy`, `
 <CodeGroup>
 ```bash cURL — Archive Email
 curl -X POST http://localhost:7842/substrate/v1/action \
-  -H "X-Substrate-Key: sk_nsp_..." \
+  -H "X-Substrate-Key: nsp_live_sk_..." \
   -H "Content-Type: application/json" \
   -d '{
     "app_id": "gmail-chrome-12847",
@@ -180,7 +180,7 @@ curl -X POST http://localhost:7842/substrate/v1/action \
 
 ```bash cURL — Send Reply with Verify
 curl -X POST http://localhost:7842/substrate/v1/action \
-  -H "X-Substrate-Key: sk_nsp_..." \
+  -H "X-Substrate-Key: nsp_live_sk_..." \
   -H "Content-Type: application/json" \
   -d '{
     "pid": 12847,

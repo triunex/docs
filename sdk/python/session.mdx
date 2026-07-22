@@ -235,7 +235,7 @@ import nelieo_nsp as nsp
 async def email_responder():
     """Read all unread emails and send a canned reply."""
     
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         session = await client.attach("Gmail")
         
         print(f"Connected to Gmail (conf={session.confidence:.2f})")

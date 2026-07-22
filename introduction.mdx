@@ -69,7 +69,7 @@ The NSP daemon (`axon-daemon`) runs on the host machine alongside your applicati
 
 <CardGroup cols={2}>
   <Card title="Process Watcher" icon="eye">
-    Continuously scans all running OS processes, classifies their runtime (V8 / JVM / CLR / Native), and manages probe attachment lifecycle.
+    Continuously scans all running OS processes, classifies their runtime (V8 / JVM / CLR), and manages probe attachment lifecycle.
   </Card>
   <Card title="Runtime Probes" icon="cpu">
     Language-specific probes that attach to live processes and extract semantic state — without source code, UI automation, or instrumentation.
@@ -91,7 +91,8 @@ The NSP daemon (`axon-daemon`) runs on the host machine alongside your applicati
 | **JavaScript/V8** | Gmail, Slack, VS Code, Notion, GitHub, Salesforce, WhatsApp, Discord, Shopify | V8 Inspector Protocol (CDP) + ASO fast-path | >99% |
 | **Java/JVM** | SAP, Eclipse, IntelliJ, Jenkins, Elasticsearch, ArduPilot GCS | JVMTI + JNI reflection | >97% |
 | **.NET/CLR** | Excel, Word, PowerPoint, Visual Studio, Mission Planner, Azure tools | Agent-native MMF + CLR heap walk + JIT hooks | >97% |
-| **Native C++** | Bloomberg Terminal, Photoshop, AutoCAD, Chrome internals | ptrace + Visual-Memory Grounding | >75% |
+
+*Note: Native C/C++ runtime support will be released next month.*
 
 ---
 

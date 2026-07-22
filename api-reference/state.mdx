@@ -130,12 +130,10 @@ The response is a **flat JSON object** — the `SubstrateState` fields are all a
 
 <CodeGroup>
 ```bash cURL
-curl -H "X-Substrate-Key: sk_nsp_..." \
+curl -H "X-Substrate-Key: nsp_live_sk_..." \
      http://localhost:7842/substrate/v1/state/12847
-```
 
-```bash cURL (fresh)
-curl -H "X-Substrate-Key: sk_nsp_..." \
+curl -H "X-Substrate-Key: nsp_live_sk_..." \
      "http://localhost:7842/substrate/v1/state/12847?fresh=true"
 ```
 

@@ -5,9 +5,9 @@ description: "How NSP's runtime probes attach to live processes and extract sema
 
 ## What is a Probe?
 
-A **probe** is the component that physically connects to a running process and reads its internal state. NSP has four probes, each targeting a different runtime environment:
+A **probe** is the component that physically connects to a running process and reads its internal state. NSP provides language-specific probes targeting major application runtimes:
 
-<CardGroup cols={2}>
+<CardGroup cols={3}>
   <Card title="V8 / JavaScript" icon="js" href="/probes/v8">
     Chrome DevTools Protocol + ASO injection. Covers Gmail, Slack, VS Code, Notion, any Electron app. Typical latency: **5–50ms**.
   </Card>
@@ -17,10 +17,9 @@ A **probe** is the component that physically connects to a running process and r
   <Card title="CLR / .NET" icon="microsoft" href="/probes/clr">
     CLR Hosting API injection + MMF bridge. Covers Mission Planner, WinForms, WPF, .NET 4.x/6+. Typical latency: **10–80ms**.
   </Card>
-  <Card title="Native" icon="c" href="/probes/native">
-    ReadProcessMemory + Visual-Memory Grounding. Covers C/C++ apps, Bloomberg Terminal, AutoCAD. Typical latency: **50–500ms**.
-  </Card>
 </CardGroup>
+
+*Note: Native C/C++ process probing will arrive in next month's release.*
 
 ---
 
@@ -36,7 +35,7 @@ Every tracked process goes through the same lifecycle:
 | **Schema Build** | Action schemas written to SQLite registry | < 1s |
 | **Fast Poll** | Repeated state reads using optimized fast-path | 50ms/cycle |
 | **Notification** | `StateChangeNotification` broadcast to WebSocket subscribers | < 1ms |
-| **Detachment** | Process exits → probe cleaned up, state removed | < 1s |
+| **Detachment** | Process exited → probe cleaned up, state removed | < 1s |
 
 ---
 
@@ -65,7 +64,6 @@ Each probe produces a `confidence` score (0.0–1.0) reflecting how complete its
 | V8 (Heap snapshot) | 0.75–0.90 | 0.90–0.97 |
 | JVM | 0.93–0.97 | 0.95–0.98 |
 | CLR | 0.93–0.97 | 0.95–0.98 |
-| Native | 0.40–0.75 | 0.60–0.80 |
 
 ---
 

@@ -48,11 +48,11 @@ class NSPClient:
 
 ```python
 # Recommended — context manager handles cleanup
-async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
     apps = await client.list_apps()
 
 # Manual lifecycle (for long-lived clients)
-client = nsp.NSPClient(api_key="sk_nsp_...")
+client = nsp.NSPClient(api_key="nsp_live_sk_...")
 await client.__aenter__()
 try:
     apps = await client.list_apps()
@@ -223,7 +223,7 @@ import asyncio
 import nelieo_nsp as nsp
 
 async def monitor_gmail():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         # Wait for Gmail to be tracked (in case Chrome just launched)
         print("Waiting for Gmail...")
         session = await client.wait_for_app("Gmail", timeout=30.0)

@@ -31,7 +31,7 @@ import asyncio
 import nelieo_nsp as nsp
 
 async def main():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         apps = await client.list_apps()
         for app in apps:
             print(f"{app.app_name} | {app.runtime} | conf={app.confidence:.2f}")
@@ -45,7 +45,7 @@ asyncio.run(main())
 ## Step 2: Read Telemetry
 
 ```python
-async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
     session = await client.attach("Mission Planner")
     
     # Read standard SSF state (normalized by the CLR probe)
@@ -141,7 +141,7 @@ print(f"Takeoff: {result.success}")
 
 ```python
 async def monitor_flight():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         session = await client.attach("Mission Planner")
         
         print("Monitoring flight (Ctrl+C to stop)...")
@@ -188,7 +188,7 @@ WAYPOINTS = [
 ]
 
 async def run_mission():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         session = await client.attach("Mission Planner")
         print(f"Connected. Confidence: {session.confidence:.2f}")
         

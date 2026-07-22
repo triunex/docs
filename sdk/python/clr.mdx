@@ -188,7 +188,7 @@ import asyncio
 import nelieo_nsp as nsp
 
 async def mission_planner_monitor():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         session = await client.wait_for_app("Mission Planner", timeout=30.0)
         
         print(f"Connected to Mission Planner ({session.runtime})")

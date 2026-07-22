@@ -26,7 +26,7 @@ import asyncio
 import nelieo_nsp as nsp
 
 async def main():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         session = await client.wait_for_app("ArduPilot GCS", timeout=30.0)
         print(f"Connected. Confidence: {session.confidence:.2f}")
         
@@ -116,7 +116,7 @@ print(f"Airborne: {result.success}")
 
 ```python
 async def stream_telemetry():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         session = await client.wait_for_app("ArduPilot GCS")
         
         print("Streaming telemetry...")

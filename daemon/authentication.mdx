@@ -1,41 +1,43 @@
 ---
 title: "Authentication"
-description: "How to generate API keys, authenticate requests, and configure the auth layer."
+description: "How API key authentication works, platform verification, and security configuration."
 ---
 
 ## Overview
 
-By default, the NSP daemon requires every API request to include a valid API key in the `X-Substrate-Key` header. This prevents other processes on the same machine from calling your daemon without authorization.
+By default, the NSP daemon requires every API request to include a valid API key in the `X-Substrate-Key` header. This prevents unauthorized local processes or scripts from accessing your daemon.
+
+The daemon authenticates requests via cloud verification with [platform.nelieo.com](https://platform.nelieo.com). Verified keys are cached in memory for sub-millisecond authentication performance.
 
 <Warning>
-  The daemon will warn loudly on startup if `auth.require_key = false`. **Never** disable auth in production environments.
+  The daemon will log a warning on startup if `auth.require_key = false`. **Never** disable auth in production environments.
 </Warning>
 
 ---
 
-## Generating an API Key
+## Getting an API Key
 
-```bash
-axon-daemon.exe keygen
-```
+All NSP API keys are generated from the Nelieo platform dashboard:
 
-**Output:**
-```
-✅ Generated new API key: sk_nsp_a1b2c3d4e5f6789...
-   Added to: C:\ProgramData\Nelieo\axon_keys.json
-   The daemon will accept this key immediately (no restart required).
-```
+1. Go to [platform.nelieo.com](https://platform.nelieo.com)
+2. Sign in to your Nelieo account
+3. Generate your API key
 
-You can also generate keys through the Nelieo platform dashboard at [platform.nelieo.com/keys](https://platform.nelieo.com/keys).
+Your key format:
+```text
+nsp_live_sk_a1b2c3d4e5f6789...
+```
 
 ---
 
-## Using an API Key
+## Authenticating Requests
 
-Add the key to every request via the `X-Substrate-Key` header:
+Pass your API key in the `X-Substrate-Key` HTTP header for REST calls, or pass it to the SDK.
+
+### cURL
 
 ```bash
-curl -H "X-Substrate-Key: sk_nsp_a1b2c3d4e5f6..." \
+curl -H "X-Substrate-Key: nsp_live_sk_a1b2c3d4e5f6..." \
      http://localhost:7842/substrate/v1/apps
 ```
 
@@ -44,38 +46,32 @@ curl -H "X-Substrate-Key: sk_nsp_a1b2c3d4e5f6..." \
 ```python
 import nelieo_nsp as nsp
 
-# Pass the key directly
-async with nsp.NSPClient(api_key="sk_nsp_a1b2c3d4...") as client:
+# Pass key explicitly
+async with nsp.NSPClient(api_key="nsp_live_sk_a1b2c3d4...") as client:
     apps = await client.list_apps()
 
-# Or set the NSP_API_KEY environment variable and omit the argument
-# export NSP_API_KEY=sk_nsp_a1b2c3d4...
+# Or via environment variable NSP_API_KEY=nsp_live_sk_a1b2c3d4...
 async with nsp.NSPClient() as client:
     apps = await client.list_apps()
 ```
 
 ---
 
-## Keys File Format
+## How Key Verification Works
 
-API keys are stored in a JSON file:
-
-```json
-{
-  "keys": [
-    {
-      "id": "key_01j5abc123",
-      "key_hash": "blake3:a3f8c9d2...",
-      "label": "my-agent-prod",
-      "created_at": "2026-07-20T13:00:00Z",
-      "last_used_at": "2026-07-20T18:30:00Z",
-      "enabled": true
-    }
-  ]
-}
 ```
-
-Keys are stored as **BLAKE3 hashes** — the plaintext key is never written to disk. Only the hash is verified at runtime.
+Agent Request (X-Substrate-Key: nsp_live_sk_...)
+       │
+       ▼
+Local NSP Daemon (localhost:7842)
+       │
+       ├── Check in-memory verification cache (sub-ms hit)
+       │
+       └── If cache miss → POST https://platform.nelieo.com/api/verify
+               │
+               ├── 200 OK → Cache key & permit request
+               └── 401 Unauthorized → Return 401 JSON error
+```
 
 ---
 
@@ -84,15 +80,15 @@ Keys are stored as **BLAKE3 hashes** — the plaintext key is never written to d
 | Status | Error Code | Description |
 |--------|-----------|-------------|
 | `401` | `missing_key` | No `X-Substrate-Key` header present |
-| `401` | `invalid_key` | Key provided but not found in key store |
-| `401` | `disabled_key` | Key exists but `enabled: false` |
+| `401` | `invalid_key` | Key invalid or revoked on platform.nelieo.com |
+| `401` | `disabled_key` | Key disabled on platform console |
 
 ---
 
-## Disabling Auth (Dev Only)
+## Disabling Auth (Development Only)
 
 ```toml
-# axon.toml — DEVELOPMENT ONLY
+# DEVELOPMENT ONLY
 [auth]
 require_key = false
 ```
@@ -102,8 +98,8 @@ require_key = false
 AXON_AUTH__REQUIRE_KEY=false axon-daemon.exe run
 ```
 
-The daemon will print this warning every 60 seconds when auth is disabled:
+When auth is disabled, the daemon prints a continuous warning log:
 
-```
-⚠️  NSP DAEMON RUNNING WITHOUT AUTHENTICATION
+```text
+⚠️  NSP DAEMON RUNNING WITHOUT AUTHENTICATION — ALL REQUESTS ACCEPTED ANONYMOUSLY
 ```

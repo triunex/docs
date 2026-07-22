@@ -22,7 +22,7 @@ import asyncio
 import nelieo_nsp as nsp
 
 async def main():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         session = await client.attach("Gmail")
         
         # Auto-refresh: session.state is always current inside the loop
@@ -80,7 +80,7 @@ async def react(session, event):
             print(f"  Altitude: {session.get_float('flight.altitude_m'):.1f}m")
 
 async def main():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         apps = await client.list_apps()
         sessions = []
         for app in apps:
@@ -127,7 +127,7 @@ async def reactive_handler(session):
                 print(f"🔔 New email: {subject}")
 
 async def main():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         session = await client.attach("Gmail")
         
         # Run both concurrently
@@ -170,7 +170,7 @@ For testing or non-Python clients:
 # Install websocat
 # https://github.com/vi/websocat
 
-websocat "ws://localhost:7842/substrate/v1/watch/12847?key=sk_nsp_..."
+websocat "ws://localhost:7842/substrate/v1/watch/12847?key=nsp_live_sk_..."
 ```
 
 Output (one JSON line per event):

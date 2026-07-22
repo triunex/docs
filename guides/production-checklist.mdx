@@ -159,7 +159,7 @@ import nelieo_nsp as nsp
 
 async def load_test():
     """Check how many state reads/second your daemon handles."""
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         session = await client.attach("Gmail")
         
         start = time.monotonic()

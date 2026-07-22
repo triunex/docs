@@ -120,7 +120,7 @@ import asyncio
 import nelieo_nsp as nsp
 
 async def ardupilot_monitor():
-    async with nsp.NSPClient(api_key="sk_nsp_...") as client:
+    async with nsp.NSPClient(api_key="nsp_live_sk_...") as client:
         session = await client.wait_for_app("ArduPilot GCS", timeout=30.0)
         print(f"Connected. Runtime: {session.runtime}")
         

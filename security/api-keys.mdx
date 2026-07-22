@@ -3,101 +3,77 @@ title: "API Keys"
 description: "Generate, manage, and rotate NSP API keys."
 ---
 
-## Generating Keys
+## Overview
 
-```bash
-# Generate a new key and register it with the daemon
-axon-daemon.exe keygen
-```
+NSP uses cloud-verified API keys. All API keys are generated and managed through the Nelieo platform dashboard at [platform.nelieo.com](https://platform.nelieo.com).
 
-**Output:**
-```
-✅ Generated new API key: sk_nsp_a1b2c3d4e5f6789...
-   Key ID: key_01j5abc123
-   Added to: C:\ProgramData\Nelieo\axon_keys.json
-   Label: (unlabeled)
-```
-
-### With a Label
-
-```bash
-axon-daemon.exe keygen --label "prod-agent-gmail"
-```
-
-Labels help you track which key is used by which agent.
+When your agent makes requests to the local NSP daemon with `X-Substrate-Key: nsp_live_sk_...`, the daemon verifies the key with the Nelieo cloud platform (`platform.nelieo.com/api/verify`) and caches the validation in memory for sub-millisecond subsequent requests.
 
 ---
 
-## Keys File
+## Generating API Keys
 
-Keys are stored in `C:\ProgramData\Nelieo\axon_keys.json`:
+1. Go to [platform.nelieo.com](https://platform.nelieo.com)
+2. Sign in to your Nelieo account
+3. Click **Create New API Key**
+4. Assign a label (e.g. `prod-agent-gmail` or `dev-local`)
+5. Copy your newly generated key
 
-```json
-{
-  "keys": [
-    {
-      "id": "key_01j5abc123",
-      "key_hash": "blake3:a3f8c9d2e1b6f5...",
-      "label": "prod-agent-gmail",
-      "created_at": "2026-07-20T13:00:00Z",
-      "last_used_at": "2026-07-20T18:30:00Z",
-      "enabled": true
-    },
-    {
-      "id": "key_01j5xyz789",
-      "key_hash": "blake3:b4g9d0e2c7...",
-      "label": "dev-local",
-      "created_at": "2026-07-01T09:00:00Z",
-      "last_used_at": null,
-      "enabled": true
-    }
-  ]
-}
+Your key will be formatted like:
+```text
+nsp_live_sk_a1b2c3d4e5f6789...
 ```
 
-Keys are stored as **BLAKE3 hashes** — the plaintext key cannot be recovered from this file.
+<Warning>
+  Copy your key immediately upon generation — it is shown only once. If lost, you can revoke it and generate a new key from the platform console.
+</Warning>
 
 ---
 
-## Disabling a Key
+## Key Management & Revocation
 
-To revoke a key without deleting it (for audit trail), set `"enabled": false`:
+You can manage all active keys directly from [platform.nelieo.com](https://platform.nelieo.com):
 
-```json
-{
-  "id": "key_01j5abc123",
-  "key_hash": "blake3:...",
-  "enabled": false
-}
-```
-
-The daemon picks up changes to this file without restarting (hot reload, 5s polling).
+- **Labeling:** Organize keys by agent name, environment, or team member.
+- **Revocation:** Disable or delete a key instantly if it is compromised. Once revoked in the cloud console, the local daemon will reject any requests using that key.
+- **Audit Logs:** Monitor key creation dates and last-used timestamps across your agents.
 
 ---
 
 ## Key Rotation
 
-1. Generate a new key: `axon-daemon.exe keygen --label "prod-agent-v2"`
-2. Update your agent to use the new key
-3. Verify the new key works: `curl -H "X-Substrate-Key: sk_nsp_<new>" http://localhost:7842/health`
-4. Set `"enabled": false` on the old key
-5. After 24h with no errors, delete the old key entry
+To rotate an API key safely without downtime:
+
+1. Generate a new key at [platform.nelieo.com](https://platform.nelieo.com) with a label like `prod-agent-v2`.
+2. Update your agent environment variable (`NSP_API_KEY=nsp_live_sk_<new>`) or application configuration.
+3. Test your agent to ensure calls succeed:
+   ```bash
+   curl -H "X-Substrate-Key: nsp_live_sk_<new>" http://localhost:7842/substrate/v1/apps
+   ```
+4. Revoke or delete the old key in the Nelieo platform console.
 
 ---
 
 ## Using Keys in Code
 
+### Python SDK
+
 ```python
-# Option 1: Explicit (not recommended for production)
-client = nsp.NSPClient(api_key="sk_nsp_a1b2c3...")
+import nelieo_nsp as nsp
 
-# Option 2: Environment variable (recommended)
-# Set NSP_API_KEY in your environment or .env file
-client = nsp.NSPClient()  # Reads NSP_API_KEY automatically
+# Option 1: Pass the key directly
+async with nsp.NSPClient(api_key="nsp_live_sk_a1b2c3d4...") as client:
+    apps = await client.list_apps()
 
-# Option 3: Secrets manager (production)
-import boto3
-secrets = boto3.client("secretsmanager")
-api_key = secrets.get_secret_value(SecretId="prod/nsp-api-key")["SecretString"]
-client = nsp.NSPClient(api_key=api_key)
+# Option 2: Set the NSP_API_KEY environment variable (Recommended)
+# export NSP_API_KEY=nsp_live_sk_a1b2c3d4...
+async with nsp.NSPClient() as client:
+    apps = await client.list_apps()
+```
+
+### cURL / REST API
+
+```bash
+curl -H "X-Substrate-Key: nsp_live_sk_a1b2c3d4..." \
+     http://localhost:7842/substrate/v1/apps
 ```

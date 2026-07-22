@@ -23,7 +23,7 @@
   ],
   "topbarCtaButton": {
     "name": "Get API Key",
-    "url": "https://platform.nelieo.com/keys"
+    "url": "https://platform.nelieo.com"
   },
   "tabs": [
     {
@@ -36,11 +36,6 @@
     }
   ],
   "anchors": [
-    {
-      "name": "GitHub",
-      "icon": "github",
-      "url": "https://github.com/triunex/axon"
-    },
     {
       "name": "Community",
       "icon": "discord",
@@ -67,7 +62,6 @@
       "pages": [
         "daemon/overview",
         "daemon/installation",
-        "daemon/configuration",
         "daemon/authentication",
         "daemon/windows-service"
       ]
@@ -78,8 +72,7 @@
         "probes/overview",
         "probes/v8",
         "probes/jvm",
-        "probes/clr",
-        "probes/native"
+        "probes/clr"
       ]
     },
     {
@@ -144,7 +137,6 @@
   ],
   "footerSocials": {
     "x": "https://x.com/nelieo_ai",
-    "github": "https://github.com/triunex/axon",
     "linkedin": "https://linkedin.com/company/nelieo"
   },
   "feedback": {

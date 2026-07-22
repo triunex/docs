@@ -67,7 +67,7 @@ Every application's state is represented as a `SubstrateState` object. This is t
 | `app_id` | string | Stable identifier — survives process restarts |
 | `app_name` | string | Human-readable name e.g. `"Gmail"` |
 | `pid` | integer | OS process ID at time of capture |
-| `runtime` | enum | `v8` / `jvm` / `clr` / `native` / `unknown` |
+| `runtime` | enum | `v8` / `jvm` / `clr` / `unknown` |
 | `confidence` | float | Probe quality score 0.0–1.0 |
 | `objects` | object | Dot-notation key-value state map |
 | `actions` | object | Available action schemas |
@@ -93,7 +93,6 @@ Every `SubstrateState` has a `confidence` field (0.0–1.0) representing how cer
 | V8 / JavaScript | `0.95 – 0.99` |
 | JVM / Java | `0.93 – 0.97` |
 | CLR / .NET | `0.93 – 0.97` |
-| Native | `0.40 – 0.75` |
 
 ---
 
@@ -214,11 +213,9 @@ The CLR probe uses a **Memory-Mapped File (MMF)** bridge to communicate with a m
 
 **Applies to:** Mission Planner, WinForms apps, WPF apps, Visual Studio, Microsoft Office, .NET 4.x and .NET 6+ apps.
 
-### Native / C++
+### Native / C++ (Coming Next Month)
 
-The native probe uses **ptrace** (Linux) or **ReadProcessMemory** (Windows) to read process memory, combined with **Visual-Memory Grounding** to semantically label raw addresses.
-
-**Applies to:** Bloomberg Terminal, Photoshop, AutoCAD, Chrome internals (C++ layer).
+Probing for native C/C++ applications without managed runtimes will be supported in next month's release.
 
 ---
 
@@ -233,7 +230,7 @@ App Starts
 ProcessScanner detects process (PID, exe name, cmdline)
    │
    ▼
-RuntimeDetector classifies: V8 / JVM / CLR / Native
+RuntimeDetector classifies: V8 / JVM / CLR
    │
    ▼
 SignatureRegistry matches known app → assigns app_id + app_name

@@ -76,7 +76,7 @@ Authorization: X-Substrate-Key: <key>
 
 <CodeGroup>
 ```bash cURL
-curl -H "X-Substrate-Key: sk_nsp_..." \
+curl -H "X-Substrate-Key: nsp_live_sk_..." \
      http://localhost:7842/substrate/v1/apps
 ```
 
@@ -90,7 +90,7 @@ for app in apps:
 
 ```javascript Fetch
 const res = await fetch("http://localhost:7842/substrate/v1/apps", {
-  headers: { "X-Substrate-Key": "sk_nsp_..." }
+  headers: { "X-Substrate-Key": "nsp_live_sk_..." }
 });
 const { apps } = await res.json();
 ```

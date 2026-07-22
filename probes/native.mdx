@@ -1,74 +1,13 @@
 ---
-title: "Native Probe"
-description: "How NSP reads state from native C/C++ applications using memory reading and Visual-Memory Grounding."
+title: "Native Probe (Coming Next Month)"
+description: "Native C/C++ process state probing will be available in next month's NSP update."
 ---
 
-## What the Native Probe Does
+## Release Notice
 
-The `axon-native` crate handles processes that don't use a managed runtime — C/C++ applications, Rust binaries, Go programs, and any process without a JVM, CLR, or V8 engine.
+Native C/C++ application probing (for processes without managed runtimes such as C/C++, Rust, and Go binaries) is currently in final testing and will be released **next month**.
 
-Native probing is inherently harder than managed runtimes because:
-- No reflection metadata (no type names, field names, method signatures)
-- Memory layout depends on compiler, optimization flags, and version
-- Data can be at any address with no registry
-
-NSP uses **Visual-Memory Grounding** to solve this: it combines screenshot-derived visual understanding with memory read patterns to assign semantic labels to raw memory regions.
-
----
-
-## Technical Approach
-
-```
-Process memory scan (ReadProcessMemory / ptrace)
-  │
-  ▼
-Symbol resolution (PDB/DWARF debug symbols if available)
-  │
-  ▼
-Visual-Memory Grounding:
-  - Screenshot capture → Vision model → semantic regions
-  - Memory pattern matching → candidate values
-  - Cross-correlation → semantic labels
-  │
-  ▼
-SubstrateState (confidence 0.40–0.75)
-```
-
----
-
-## Confidence Expectations
-
-Native probing produces significantly lower confidence than managed runtimes:
-
-| Scenario | Confidence |
-|----------|-----------|
-| App has public PDB/DWARF symbols | 0.60–0.80 |
-| App has stripped symbols (common in production) | 0.40–0.60 |
-| App uses obfuscation or custom allocators | 0.30–0.50 |
-
-<Warning>
-  `irreversible_write` actions (which require confidence ≥ 0.95) are rarely available for native apps. Stick to `read` and `reversible_write` operations.
-</Warning>
-
----
-
-## Supported Applications
-
-Native probing is best-effort. Applications with public debug symbols have the highest coverage:
-
-| Application | Coverage |
-|-------------|---------|
-| Bloomberg Terminal | Moderate — key financial data fields |
-| Adobe Photoshop | Moderate — document state, tool state |
-| AutoCAD | Moderate — drawing state |
-| Chrome (C++ layer) | Good — combined with V8 probe |
-| Unreal Engine games | Low — depends on debug symbols |
-| Custom enterprise apps | Varies |
-
----
-
-## Combining with Other Probes
-
-For Electron apps, NSP runs **both** the V8 probe (for JavaScript state) and the Native probe (for C++ layer state) simultaneously. The results are merged into a single `SubstrateState` with the V8 confidence score dominating.
-
-For C++ applications that embed V8 or a JVM, NSP prefers the managed runtime probe if detected.
+Current NSP releases support:
+- **V8 / JavaScript** (Chrome, Electron, Node.js)
+- **JVM / Java** (Java desktop, Spring, enterprise JVM services)
+- **CLR / .NET** (WinForms, WPF, .NET 4.x/6+ apps)
